@@ -1,0 +1,16 @@
+#Compiled Object files
+*.slo
+*.lo
+*.o
+
+#Compiled Dynamic libraries
+
+
+#CMake
+Makefile
+
+#Python
+*.py
+
+#logs
+*.log
