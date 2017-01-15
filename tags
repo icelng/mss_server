@@ -1,0 +1,101 @@
+!_TAG_FILE_FORMAT	2	/extended format; --format=1 will not append ;" to lines/
+!_TAG_FILE_SORTED	1	/0=unsorted, 1=sorted, 2=foldcase/
+!_TAG_PROGRAM_AUTHOR	Darren Hiebert	/dhiebert@users.sourceforge.net/
+!_TAG_PROGRAM_NAME	Exuberant Ctags	//
+!_TAG_PROGRAM_URL	http://ctags.sourceforge.net	/official site/
+!_TAG_PROGRAM_VERSION	5.9~svn20110310	//
+CLIENT_NAME_LENGTH	client.h	3;"	d
+HLIST_HEAD	list.h	208;"	d
+HLIST_HEAD_INIT	list.h	207;"	d
+INIT_HLIST_HEAD	list.h	209;"	d
+INIT_HLIST_NODE	list.h	210;"	d
+INIT_LIST_HEAD	list.h	26;"	d
+LIST_HEAD	list.h	23;"	d
+LIST_HEAD_INIT	list.h	21;"	d
+LIST_POISON1	list.h	14;"	d
+LIST_POISON2	list.h	15;"	d
+MAX_RECV_STR_LENGTH	client.h	6;"	d
+VERIFY_TIMEOUT	client.h	5;"	d
+WD_RESUME_CNT	client.h	4;"	d
+_LINUX_LIST_H	list.h	3;"	d
+__client_del	client.c	/^int __client_del(struct client_info *p_client_i){$/;"	f
+__client_search	client.c	/^struct client_info* __client_search(int client_id){$/;"	f
+__hlist_del	list.h	/^static inline void __hlist_del(struct hlist_node *n)   $/;"	f
+__list_add	list.h	/^static inline void __list_add(struct list_head *new,   $/;"	f
+__list_del	list.h	/^static inline void __list_del(struct list_head * prev, struct list_head * next)   $/;"	f
+__list_for_each	list.h	163;"	d
+__list_splice	list.h	/^static inline void __list_splice(struct list_head *list,   $/;"	f
+client_create	client.c	/^int client_create(int sockfd_cntl,struct in_addr ip){$/;"	f
+client_i_h	client.c	/^struct client_info client_i_h;   \/\/链表头客户端$/;"	v	typeref:struct:client_info
+client_info	client.c	/^struct client_info{$/;"	s	file:
+client_list_mutex	client.c	/^sem_t client_list_mutex;  \/\/互斥访问客户端列表$/;"	v
+client_manage_init	client.c	/^int client_manage_init(){$/;"	f
+client_recv_str	client.c	/^int client_recv_str(int sockfd,char *str,int size){$/;"	f
+client_remove	client.c	/^int client_remove(int client_id){$/;"	f
+client_search	client.c	/^struct client_info* client_search(int client_id){$/;"	f
+client_verify	client.c	/^int client_verify(int sockfd_cntl,struct in_addr ip,struct verify_info *p_v_i){$/;"	f
+client_wd_decline	client.c	/^void client_wd_decline(){$/;"	f
+client_wd_init	client.c	/^int client_wd_init(){$/;"	f
+client_wd_resume	client.c	/^int client_wd_resume(int client_id){$/;"	f
+container_of	list.h	7;"	d
+first	list.h	/^struct hlist_node *first;   $/;"	m	struct:hlist_head	typeref:struct:hlist_head::hlist_node
+hlist_add_after	list.h	/^static inline void hlist_add_after(struct hlist_node *n,   $/;"	f
+hlist_add_before	list.h	/^static inline void hlist_add_before(struct hlist_node *n,   $/;"	f
+hlist_add_head	list.h	/^static inline void hlist_add_head(struct hlist_node *n, struct hlist_head *h)   $/;"	f
+hlist_del	list.h	/^static inline void hlist_del(struct hlist_node *n)   $/;"	f
+hlist_del_init	list.h	/^static inline void hlist_del_init(struct hlist_node *n)   $/;"	f
+hlist_empty	list.h	/^static inline int hlist_empty(const struct hlist_head *h)   $/;"	f
+hlist_entry	list.h	278;"	d
+hlist_for_each	list.h	280;"	d
+hlist_for_each_entry	list.h	288;"	d
+hlist_for_each_entry_continue	list.h	294;"	d
+hlist_for_each_entry_from	list.h	300;"	d
+hlist_for_each_entry_safe	list.h	305;"	d
+hlist_for_each_safe	list.h	284;"	d
+hlist_head	list.h	/^struct hlist_head {   $/;"	s
+hlist_node	list.h	/^struct hlist_node {   $/;"	s
+hlist_unhashed	list.h	/^static inline int hlist_unhashed(const struct hlist_node *h)   $/;"	f
+id	client.c	/^    int id;  \/\/客户端的ID$/;"	m	struct:client_info	file:
+id	client.h	/^    int id;$/;"	m	struct:verify_info
+ip	client.c	/^    struct in_addr ip;   \/\/客户端IP$/;"	m	struct:client_info	typeref:struct:client_info::in_addr	file:
+list	client.c	/^    struct list_head list;  \/\/链表$/;"	m	struct:client_info	typeref:struct:client_info::list_head	file:
+list_add	list.h	/^static inline void list_add(struct list_head *new, struct list_head *head)   $/;"	f
+list_add_tail	list.h	/^static inline void list_add_tail(struct list_head *new, struct list_head *head)   $/;"	f
+list_del	list.h	/^static inline void list_del(struct list_head *entry)   $/;"	f
+list_del_init	list.h	/^static inline void list_del_init(struct list_head *entry)   $/;"	f
+list_empty	list.h	/^static inline int list_empty(const struct list_head *head)   $/;"	f
+list_empty_careful	list.h	/^static inline int list_empty_careful(const struct list_head *head)   $/;"	f
+list_entry	list.h	156;"	d
+list_for_each	list.h	159;"	d
+list_for_each_entry	list.h	174;"	d
+list_for_each_entry_continue	list.h	187;"	d
+list_for_each_entry_reverse	list.h	179;"	d
+list_for_each_entry_safe	list.h	192;"	d
+list_for_each_prev	list.h	166;"	d
+list_for_each_safe	list.h	170;"	d
+list_head	list.h	/^struct list_head {   $/;"	s
+list_move	list.h	/^static inline void list_move(struct list_head *list, struct list_head *head)   $/;"	f
+list_move_tail	list.h	/^static inline void list_move_tail(struct list_head *list,   $/;"	f
+list_prepare_entry	list.h	184;"	d
+list_splice	list.h	/^static inline void list_splice(struct list_head *list, struct list_head *head)   $/;"	f
+list_splice_init	list.h	/^static inline void list_splice_init(struct list_head *list,   $/;"	f
+log_init	server-init.c	/^int log_init(){$/;"	f
+lv	client.c	/^    int lv;   \/\/客户端级别(0,1,2,0是最高级,可使用所有的指令),级别决定各种权限$/;"	m	struct:client_info	file:
+lv	client.h	/^    int lv;$/;"	m	struct:verify_info
+main	main.c	/^int main(){$/;"	f
+name	client.c	/^    char name[CLIENT_NAME_LENGTH];  \/\/客户端名称$/;"	m	struct:client_info	file:
+name	client.h	/^    char name[CLIENT_NAME_LENGTH];$/;"	m	struct:verify_info
+next	list.h	/^struct hlist_node *next, **pprev;   $/;"	m	struct:hlist_node	typeref:struct:hlist_node::hlist_node
+next	list.h	/^struct list_head *next, *prev;   $/;"	m	struct:list_head	typeref:struct:list_head::list_head
+offsetof	list.h	5;"	d
+pprev	list.h	/^struct hlist_node *next, **pprev;   $/;"	m	struct:hlist_node	typeref:struct:hlist_node::
+prefetch	list.h	/^static inline void prefetch(const void *x) {;}   $/;"	f
+prefetchw	list.h	/^static inline void prefetchw(const void *x) {;}   $/;"	f
+prev	list.h	/^struct list_head *next, *prev;   $/;"	m	struct:list_head	typeref:struct:list_head::
+server_addr	server-init.c	/^struct sockaddr_in server_addr;$/;"	v	typeref:struct:sockaddr_in
+server_socket_create	server-init.c	/^int server_socket_create(int *p_server_sockfd,int port){$/;"	f
+server_sockfd	main.c	/^int server_sockfd;$/;"	v
+sockfd_cntl	client.c	/^    int sockfd_cntl;  \/\/客户端控制套接字,主要用来传输指令$/;"	m	struct:client_info	file:
+tid_irecv_thread	client.c	/^    unsigned long tid_irecv_thread;   \/\/指令接收线程ID$/;"	m	struct:client_info	file:
+verify_info	client.h	/^struct verify_info{  \/\/保存着验证信息$/;"	s
+wd_cnt	client.c	/^    int wd_cnt;   \/\/看门狗，，如果计时到0，则说明已经失去链接$/;"	m	struct:client_info	file:

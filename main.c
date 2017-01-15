@@ -12,14 +12,18 @@
 #include "server-init.h"
 #include "client.h"
 #include "string.h"  //strerror()
+#include "pthread.h"
+//#include "list.h"
+
 
 int server_sockfd;
-
 int main(){
     int client_sockfd;
     int sin_size;
     int err_ret;
+    pthread_t thread_id;
     struct sockaddr_in client_addr;
+    struct client_info *p_client_i;
 
 
     log_init();   //初始化syslog，以便查看调试信息
@@ -30,14 +34,19 @@ int main(){
     syslog(LOG_DEBUG,"server-socket is listening...");
 
 
+
     while(1){
         //接受客户端的连接请求
         if((client_sockfd = accept(server_sockfd,(struct sockaddr*)&client_addr,(socklen_t *)&sin_size)) < 0){
             syslog(LOG_DEBUG,"accept error:%s",strerror(errno));
         }
         //创建客户端
-        if((err_ret = client_create(client_sockfd,client_addr.sin_addr) < 0)){
+        p_client_i = (struct client_info*)malloc(sizeof(struct client_info));
+        p_client_i->sockfd_cntl = client_sockfd;
+        p_client_i->ip = client_addr.sin_addr;
+        if((err_ret = pthread_create(&thread_id,NULL,client_create,p_client_i) < 0)){
             syslog(LOG_DEBUG,"failed to create client:%d",err_ret);//如果失败，输出失败代码
+            free(p_client_i);
         }
     }
     return 1;
