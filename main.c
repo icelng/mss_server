@@ -42,6 +42,7 @@ int main(){
         }
         //创建客户端
         p_client_i = (struct client_info*)malloc(sizeof(struct client_info));
+        memset(p_client_i,0,sizeof(struct client_info));
         p_client_i->sockfd_cntl = client_sockfd;
         p_client_i->ip = client_addr.sin_addr;
         if((err_ret = pthread_create(&thread_id,NULL,client_create,p_client_i) < 0)){

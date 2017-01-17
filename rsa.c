@@ -1,19 +1,17 @@
 #include "stdio.h"
 #include "string.h"
-#include "openssl/rsa.h"
-#include "openssl/pem.h"
-#include "openssl/evp.h"
-#include "openssl/err.h"
-#include "openssl/ssl.h"
+#include "time.h"
 #include "sys/syslog.h"
+#include "math.h"
+#include "encdec.h"
 
 
-/* 函数名: int rsa_init()
+/* 函数名: int encdec_init()
  * 功能:
  * 参数:
  * 返回值:
  */
-int rsa_init(){
+int encdec_init(){
     SSL_library_init();
     ERR_load_BIO_strings();
     SSL_load_error_strings();
@@ -423,4 +421,60 @@ int rsa_priv_decrypt(char *privkey,char *cipher,char *out_plain){
 	EVP_PKEY_free(pri); 
 	
 	return 0;
+}
+
+/* 函数名: int aes_gen_key(char *aes_key,int n_bis)
+ * 功能: 随机生成一个指定位数的aes秘钥
+ * 参数: char *aes_key,用来保存新生成的秘钥的缓冲区
+ *       int n_bits,秘钥的位数 128 192 256
+ * 返回值: -1,发生了错误
+ *          1,生成成功
+ */
+int aes_gen_key(unsigned char *aes_key,int n_bits){
+    int n = 0;
+    int i = 0;
+    srand(time(0));
+    if(n_bits == 128){
+        n = 16;
+        for(i = 0;i < n;i++){
+            aes_key[i] = rand()%255;
+        }
+    }else if(n_bits == 192){
+        n = 24;
+        for(i = 0;i < n;i++){
+            aes_key[i] = rand()%255;
+        }
+
+    }else if(n_bits == 256){
+        n = 32;
+        for(i = 0;i < n;i++){
+            aes_key[i] = rand()%255;
+        }
+    }
+    return 1;
+}
+
+/* 函数名: int aes_cbc_enc(AES_KEY *enc_key,unsigned char *plain,unsigned char *cipher,)
+ * 功能: 使用aes算法进行加密
+ * 参数: 
+ * 返回值:
+ */
+int aes_cbc_enc(AES_KEY *enc_key,unsigned char *plain,unsigned char *cipher){
+    unsigned char iv[AES_BLOCK_SIZE];
+    memset(iv,0,AES_BLOCK_SIZE);
+    /*不知道为什么，AES加密要输入的长度需要16字节的整数倍才能够加密*/
+    AES_cbc_encrypt(plain,cipher,((strlen(plain) + 1)/16 + 1)*16,enc_key,iv,AES_ENCRYPT);
+    return 1;
+}
+
+/* 函数名: int aes_cbc_dec(AES_KEY *dec_key,unsigned char *cipher,unsigned char *plain,int cipher_length);
+ * 功能:
+ * 参数:
+ * 返回值:
+ */
+int aes_cbc_dec(AES_KEY *dec_key,unsigned char *cipher,unsigned char *plain,int cipher_length){
+    unsigned char iv[AES_BLOCK_SIZE];
+    memset(iv,0,AES_BLOCK_SIZE);
+    AES_cbc_encrypt(cipher,plain,cipher_length,dec_key,iv,AES_DECRYPT);
+    return 1;
 }

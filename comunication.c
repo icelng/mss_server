@@ -1,4 +1,3 @@
-#include "comunication.h"
 #include "stdlib.h"
 #include "stdio.h"
 #include "arpa/inet.h"  //struct in_addr
@@ -11,6 +10,8 @@
 #include "list.h"   //使用链表
 #include "string.h"
 #include "fcntl.h"
+#include "rsa.h"  //需要加密传输
+#include "comunication.h"
 //#include "mysql.h"
 
 /* 函数名: int com_recv_str(int sockfd,char *str,int size)
@@ -109,6 +110,74 @@ int com_send_str(int sockfd,char *send_str,int str_len){
     if(send(sockfd,send_buf,buf_size,0) < 0){
         syslog(LOG_DEBUG,"com_send_str error:%s",strerror(errno));
         return -1;
+    }
+    return 1;
+}
+
+
+/* 函数名: int com_rsa_recv()
+ * 功能: 接收一个字符串，并且解密好
+ * 参数: int sockfd,接收字符串的套接字
+ *       char *prvi_key,私钥
+ *       char *recv_buf,接收字符串的缓冲区
+ *       int buf_size,缓冲区的大小
+ *       int timeout_mode,超时模式，若为0则阻塞，1则超时接收
+ * 返回值: -1,接收失败
+ *         >0,接收到的字符串大小
+ */       
+int com_rsa_recv(int sockfd,char *prvi_key,char *recv_buf,int buf_size,int timeout_mode){
+    //这里的plain和recv_cipher所需的存储空间大小要相同，不然执行rsa_priv_decrypt会报错的
+    int ret;
+    char recv_cipher[MAX_RECV_STR_LENGTH];
+    char plain[MAX_RECV_STR_LENGTH];  
+    ret = com_recv_str(sockfd,recv_cipher,buf_size,timeout_mode);  
+    if(ret < 0)return ret;
+    ret = rsa_priv_decrypt(prvi_key,recv_cipher,plain);  //解密
+    if(ret < 0)return ret;
+    strncpy(recv_buf,plain,buf_size);
+    return strlen(recv_buf);
+}
+
+/* 函数名: int com_rsa_send(int sockfd,char *pub_key,char *send_buf,int buf_size)
+ * 功能: 发送一串加密的字符串
+ * 参数:
+ * 返回值:
+ */
+int com_rsa_send(int sockfd,char *pub_key,char *send_buf){
+    int ret;
+    char send_cipher[MAX_RECV_STR_LENGTH];
+    
+    ret = rsa_pub_encrypt(pub_key,send_buf,send_cipher);
+    if(ret < 0)return ret;
+    com_send_str(sockfd,send_cipher,strlen(send_cipher));
+    if(ret < 0)return ret;
+    return 1;
+}
+
+/* 函数名: int com_send_aeskey(int sockfd,unsigned char *aes_key,int n_bits)
+ * 功能: 发送aes_key
+ * 参数:
+ * 返回值:
+ */
+int com_rsa_send_aeskey(int sockfd,char *pub_key,unsigned char *aes_key,int n_bits){
+    char send_buf[257];
+    int n = 0;
+    int i;
+    if(n_bits == 128){
+        n = 128;
+    }else if(n_bits == 192){
+        n = 192;
+    }else if(n_bits == 256){
+        n = 256;
+    }else{
+        return -1;
+    }
+    for(i = 0;i < n;i++){
+        send_buf[i] = aes_key[i];
+    }
+    send_buf[i] = 0;
+    if(com_rsa_send(sockfd,pub_key,send_buf) < 0){
+        return -2;
     }
     return 1;
 }
