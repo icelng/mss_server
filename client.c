@@ -31,17 +31,33 @@ struct usr_info{  //保存着验证信息
     char pub_key[1024];  //通信所用的公钥
     char priv_key[1024];  //私钥
 };
-struct msg_struct{
-    long msg_type;
-    char msg_text[CLIENT_MSGTEXT_LENGTH];
-};
 MYSQL g_client_mysql;   //客户端数据库
 sem_t client_list_mutex;  //互斥访问客户端列表
-sem_t client_decrypt_mutex;
 int g_msqid_dec;   //解密线程所需要的消息队列ID
 struct client_info client_i_h;   //链表头客户端
 int g_socket_epoll_fd;
+int g_dec_thrd_pipfd[2];  //解密线程管道
 
+
+
+
+/* 函数名: int client_pipe_init()
+ * 功能: 生成各种所需要的管道
+ * 参数:
+ * 返回值: -1,成功
+ *          1,失败
+ */
+int client_pipe_init(){
+    int ppfds_tmp[2];
+
+    if(pipe(ppfds_tmp) == -1){
+        return -1;
+    }
+    g_dec_thrd_pipfd[0] = ppfds_tmp[0];
+    g_dec_thrd_pipfd[1] = ppfds_tmp[1];
+    
+    return 1;
+}
 /* 函数: int client_manage_init()
  * 功能: 初始化客户端管理
  * 参数: 
@@ -54,7 +70,7 @@ int client_manage_init(){
     unsigned long tid_irecv_thread;   //指令接收线程ID
     INIT_LIST_HEAD(&client_i_h.list);   //初始化客户端链表
     sem_init(&client_list_mutex,0,1);  //初始化信号量(锁)
-    rsa_init();
+    encdec_init();
     if (client_wd_init() == -1){   //初始化看门狗
         syslog(LOG_DEBUG,"client_manage_init-->client_wd_init error:return -1");
         return -1;
@@ -64,6 +80,10 @@ int client_manage_init(){
     }   
     if((g_socket_epoll_fd = epoll_create(1)) == -1){
         syslog(LOG_DEBUG,"Epoll create error:%s",strerror(errno));
+        return -1;
+    }
+    if(client_pipe_init() == -1){
+        syslog(LOG_DEBUG,"Pipe init error:%s",strerror(errno));
         return -1;
     }
     if(client_msq_init() == -1){
@@ -163,9 +183,43 @@ int client_users_show(MYSQL *p_client_mysql){
     return 1;
 }
 
+
+/* 函数名: int client_is_recv_ready(struct client_info *p_c_i)
+ * 功能: 查看客户端是否可以接收数据
+ * 参数: struct client_info *p_c_i,客户端信息结构体的指针
+ * 返回值: 0,还没做好接收数据的准备，即不能够接收数据
+ *         1,可以接收数据
+ */
+int client_is_recv_ready(struct client_info *p_c_i){
+    return p_c_i->recv_ready;
+}
+
+
+/* 函数名: int client_set_recv_ready(struct client_info *p_c_i,int new_ready_stat)
+ * 功能: 设置客户端是否可以做好接收数据的准备,当从没做好准备设置到做好准备的时候
+ *       ，设置已经接收到的大小为0,!!!!!注意!!!!!对收到的信息做完相关的动作之后，
+ *       一定要设置准备好接收数据，不然客户端不会再接收到数据的了
+ * 参数: struct client_info *p_c_i,客户端信息结构体指针
+ *       int new_ready_stat,新的准备状态
+ * 返回值: -1,设置有误
+ *          1,设置成功
+ */
+int client_set_recv_ready(struct client_info *p_c_i,int new_ready_stat){
+    if(new_ready_stat != 0 && new_ready_stat != 1 && p_c_i->recv_ready == new_ready_stat){
+        return -1;
+    }
+    p_c_i->recv_ready = new_ready_stat;
+    if(new_ready_stat == 1){  //做好接收数据的准备
+        p_c_i->recv_size = 0;
+        p_c_i->recv_is_datachar = 0;
+    }
+    return 1;
+}
+
 /* 函数名: struct client_info* client_get_ci(int client_id)
  * 功能: 根据客户端的ID，获取到客户端信息结构体的指针，该函数必须要与client_rele
- *       ase_struct()成对使用。
+ *       ase_struct()成对使用。!!!!!注意!!!!!需要访问客户端信息结构体的时候，一定
+ *       在访问前调用该函数。
  * 参数: int client_id,客户端的ID
  * 返回值: NULL,内存里不存在客户端,也即客户端没有登录
  *         !=0,客户端信息结构体的指针
@@ -186,7 +240,8 @@ struct client_info* client_get_ci(int client_id){
 }
 
 /* 函数名: int client_release_ci(struct client_info *p_c_i)
- * 功能: 释放所拿到的客户端信息结构体,与client_get_ci()成对使用
+ * 功能: 释放所拿到的客户端信息结构体,与client_get_ci()成对使用,不然该客户端信息
+ *       结构体无法被删除掉
  * 参数: struct client_info *p_c_i,所需释放的客户端信息结构体的指针
  * 返回值: -1,
  *          1,
@@ -325,13 +380,7 @@ void *client_recv_thread(){
     int n,i;
     int flags;
     int c_id;
-    struct msg_struct msgs;
-    char test_plain[4096];
-    char test_plain2[4096];
-    char cipher[4096];
     char recv_c;
-    unsigned char aes_key[16];
-    AES_KEY enc_key,dec_key;
     struct epoll_event *events;
     struct client_info *p_c_i;
     events = (struct epoll_event*)malloc(CLIENT_MAX_EPOLL_EVENTS);
@@ -345,16 +394,24 @@ void *client_recv_thread(){
             continue;
         }
         for(i = 0;i < n;i++){
-            if(!(events[i].events & EPOLLIN) ||   //EPOLLIN是包括socket正常关闭的
-                (events[i].events & EPOLLHUP) ||
-                (events[i].events & EPOLLERR)){
-                continue;
-            }
             //获取到可读的sockfd对应的客户端信息结构体的指针
             c_id = events[i].data.u32;  //获得客户端ID
             p_c_i = client_get_ci(c_id);  //根据客户端ID获取到信息结构体的指针
+            if(!(events[i].events & EPOLLIN) ||   //EPOLLIN是包括socket正常关闭的
+                (events[i].events & EPOLLHUP) ||
+                (events[i].events & EPOLLERR)){
+                if(epoll_ctl(g_socket_epoll_fd,EPOLL_CTL_DEL,p_c_i->sockfd,NULL) == -1){
+                    syslog(LOG_DEBUG,"Failed to remove sockfd from epoll:%s",strerror(errno));
+                }
+                client_release_ci(p_c_i);
+                continue;
+            }
             if(p_c_i == NULL){
                 syslog(LOG_DEBUG,"ERROR:Client_recv_thread()-->client_get_ci():struct_info of client(id:%d) not found",c_id);
+                continue;
+            }
+            if(client_is_recv_ready(p_c_i) == 0){  //客户端还未准备好接收数据
+                client_release_ci(p_c_i);
                 continue;
             }
             flags = fcntl(p_c_i->sockfd,F_GETFL,0);
@@ -366,21 +423,17 @@ void *client_recv_thread(){
                     break;
                 }
                 if(recv_c == '\n' && p_c_i->recv_is_datachar != 1){  //换行符表示结束
-                    p_c_i->recv_buf[p_c_i->recv_index] = 0;
-                    p_c_i->recv_index = 0;
+                    p_c_i->recv_buf[p_c_i->recv_size] = 0;
                     p_c_i->recv_is_datachar = 0;
-                    //msgs.msg_type = p_c_i->id;
-                    //strcpy(msgs.msg_text,p_c_i->recv_buf);
-                    //msgsnd(g_msqid_dec,&msgs,sizeof(struct msg_struct),IPC_NOWAIT);
-                    //rsa_priv_decrypt(p_c_i->priv_key,p_c_i->recv_buf,test_plain);
-                    //aes_cbc_enc(&p_c_i->aes_enc_key,test_plain,cipher);
-                    //aes_cbc_dec(&p_c_i->aes_dec_key,cipher,test_plain2);
-                    memset(test_plain,0,sizeof(test_plain));
-                    aes_cbc_dec(&p_c_i->aes_dec_key,p_c_i->recv_buf,test_plain);
-                    syslog(LOG_DEBUG,"Test msg:%s ",test_plain);
+                    //设置不可接收数据,一定要在把接收到的数据送到其他线程处理之前设置
+                    client_set_recv_ready(p_c_i,0);                      
+                    if(com_pipe_wr_data(g_dec_thrd_pipfd[1],(char*)&p_c_i->id,sizeof(p_c_i->id)) == -1){
+                        syslog(LOG_DEBUG,"ERROR:client_recv_thread()-->com_pipe_wr_data():%s",strerror(errno));
+                        client_set_recv_ready(p_c_i,1);
+                    }
                     break;
                 }else if(recv_c == '\r' && p_c_i->recv_is_datachar != 1){
-                    p_c_i->recv_index = 0;
+                    p_c_i->recv_size = 0;
                 }else{  
                     if(recv_c == 0x10 && p_c_i->recv_is_datachar != 1){  //为转义符号,说明下一个字符为数据，不是控制字符
                         p_c_i->recv_is_datachar = 1;
@@ -388,13 +441,13 @@ void *client_recv_thread(){
                         if(p_c_i->recv_is_datachar == 1){
                             p_c_i->recv_is_datachar = 0;
                         }
-                        if(p_c_i->recv_index >= CLIENT_RECV_BUF_SIZE - 1){
-                            p_c_i->recv_index = 0;
+                        if(p_c_i->recv_size >= CLIENT_RECV_BUF_SIZE - 1){
+                            p_c_i->recv_size = 0;
                             p_c_i->recv_is_datachar = 1;
                             syslog(LOG_DEBUG,"The recv_buf of client is overflow!");
                             break;
                         }
-                        p_c_i->recv_buf[p_c_i->recv_index++] = recv_c;
+                        p_c_i->recv_buf[p_c_i->recv_size++] = recv_c;
                     }
                 }
             }
@@ -410,11 +463,18 @@ void *client_recv_thread(){
  * 返回值: -1,出现错误
  *         1,调用成功
  */
-int client_parse_do(char *info_src){
-    char c_tmp;
+int client_parse_do(char *info_src,struct client_info *p_c_i){
+    char cmd[32];
+    char param[MAX_RECV_STR_LENGTH];
     int i = 0;
 
     while(info_src[i++] != ':');
+    strncpy(cmd,info_src,i - 1);
+    strcpy(param,info_src + i);
+    if(strcmp(cmd,"cnt") == 0){
+        p_c_i->msg_cnt = atoi(param);
+    }
+    //syslog(LOG_DEBUG,"msg_cnt:%d",p_c_i->msg_cnt);
 
     return 1;
 }
@@ -425,21 +485,38 @@ int client_parse_do(char *info_src){
  */
 void *client_dec_parse_thread(){
     int ret_value;
+    int c_id;
     struct client_info *p_c_i;
-    struct msg_struct msgs;
+    struct rcv_msg_struct{
+        long msg_type;
+        int client_id;
+        char msg_text[32];   //这个要比发送结构体的大一点,不然会出现 stack smashing detected错误
+    }rcv_msgs;
     char plain[MAX_RECV_STR_LENGTH];
     pthread_detach(pthread_self());  //线程结束时，资源由系统自动回收
     while(1){
-        ret_value = msgrcv(g_msqid_dec,&msgs,sizeof(struct msg_struct),0,0);
+        c_id = 0;
+        ret_value = com_pipe_rd_data(g_dec_thrd_pipfd[0],(char *)&c_id,sizeof(int));
         if(ret_value == -1){
-            syslog(LOG_DEBUG,"ERROR:client_dec_parse()-->msgrcv():%s",strerror(errno));
+            syslog(LOG_DEBUG,"ERROR:client_dec_parse()-->com_pipe_rd_data:%s",strerror(errno));
             sleep(1);
             continue;
         }
-        p_c_i = client_get_ci(msgs.msg_type);  //msg_type保存着客户端的ID 
-        rsa_priv_decrypt(p_c_i->priv_key,msgs.msg_text,plain);
+        if(c_id != 1){
+            syslog(LOG_DEBUG,"Error c_id:%d",c_id);
+        }
+        p_c_i = client_get_ci(c_id);  //msg_type保存着客户端的ID 
+        //p_c_i = client_get_ci(rcv_msgs.client_id);  //msg_type保存着客户端的ID 
+        if(p_c_i == NULL){
+            syslog(LOG_DEBUG,"Error:client_dec_parse()-->client_get_ci():the struct of client(id:%d) not found",rcv_msgs.client_id);
+            continue;
+        }
+        //AES解密
+        aes_cbc_dec(&p_c_i->aes_dec_key,(unsigned char*)p_c_i->recv_buf,(unsigned char*)plain,p_c_i->recv_size);
+        //client_parse_do(plain,p_c_i);  //可能是这个问题了,   恩，经测试，就是问题了，罪魁祸首啊！！找了差不多一天了
+        p_c_i->msg_cnt = atoi(plain);
+        client_set_recv_ready(p_c_i,1);  //测试用的语句
         client_release_ci(p_c_i);
-        syslog(LOG_DEBUG,"Msg text:%s",plain);
     }
 }
 /* 函数: void client_create()
@@ -453,7 +530,6 @@ void *client_create(void *p_client_i){
     struct client_info *p_new_client_i;
     struct epoll_event event;
     unsigned char aes_key[CLIENT_AES_KEY_LENGTH];
-    int i;
     int err_ret;
     pthread_detach(pthread_self());  //线程结束时，资源由系统自动回收
     p_new_client_i = (struct client_info*)p_client_i;
@@ -470,11 +546,6 @@ void *client_create(void *p_client_i){
     /*生成AESKEY，并且发给客户端*/
     syslog(LOG_DEBUG,"Genarating AES key and share the key"); 
     aes_gen_key(aes_key,CLIENT_AES_KEY_LENGTH);  //随机生成AES秘钥
-    printf("\n");  //测试用代码，可删
-    for(i = 0;i < 16;i++){  //
-        printf(" 0x%x",aes_key[i]); //
-    } //
-    fflush(stdout); //
     AES_set_encrypt_key(aes_key,CLIENT_AES_KEY_LENGTH,&p_new_client_i->aes_enc_key);
     AES_set_decrypt_key(aes_key,CLIENT_AES_KEY_LENGTH,&p_new_client_i->aes_dec_key);
     com_rsa_send_aeskey(p_new_client_i->sockfd,p_new_client_i->pub_key,aes_key,CLIENT_AES_KEY_LENGTH);  //rsa公钥加密发送AESkey
@@ -486,6 +557,7 @@ void *client_create(void *p_client_i){
     sem_wait(&client_list_mutex);  //互斥访问链表
     my_list_add(&p_new_client_i->list,&client_i_h.list);  //把新创建的客户端链入链表
     sem_post(&client_list_mutex);  //互斥访问链表
+    p_new_client_i->recv_ready = 1;  //做好接收准备
     //free(p_new_client_i); //测试用代码，可删
     //return NULL;//测试用代码，可删
     /*配置epoll*/
@@ -604,11 +676,12 @@ int __client_del(struct client_info *p_client_i){
     //还会监听被移除的socket的事件,下次调用epoll_wait()才不会监听该被移除的socke
     //t的事件
     if(epoll_ctl(g_socket_epoll_fd,EPOLL_CTL_DEL,p_client_i->sockfd,NULL) == -1){
-        syslog(LOG_DEBUG,"Failed to remove sockfd from epoll");
+        syslog(LOG_DEBUG,"Failed to remove sockfd from epoll:%s",strerror(errno));
     }
     if(p_client_i->sockfd != 0){
         shutdown(p_client_i->sockfd,2);  //关闭套接字
     }
+    syslog(LOG_DEBUG,"cnt:%d",p_client_i->msg_cnt);//测试用的代码，可以删除
     sem_wait(&p_client_i->del_enable);  //等待至可以删除
     free(p_client_i);
     syslog(LOG_DEBUG,"Client(name:%s id:%d) delete complete",name_temp,id_temp);
@@ -650,6 +723,9 @@ void client_wd_decline(union sigval v){
     struct client_info *p_client_i,*n;
     sem_wait(&client_list_mutex);  //互斥访问客户端列表
     list_for_each_entry_safe(p_client_i,n,&client_i_h.list,list){  
+        if(p_client_i->id == 1){
+            syslog(LOG_DEBUG,"cnt:%d",p_client_i->msg_cnt);//测试用的代码，可以删除
+        }
         //syslog(LOG_DEBUG,"client:%s wd_cnt:%d",p_client_i->name,p_client_i->wd_cnt);
         //可以对p_client_i进行删除操作
         if(--(p_client_i->wd_cnt) == 0 && p_client_i->id != -1){  

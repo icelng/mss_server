@@ -10,8 +10,9 @@
 #include "list.h"   //使用链表
 #include "string.h"
 #include "fcntl.h"
-#include "rsa.h"  //需要加密传输
+#include "encdec.h"  //需要加密传输
 #include "comunication.h"
+#include "unistd.h"
 //#include "mysql.h"
 
 /* 函数名: int com_recv_str(int sockfd,char *str,int size)
@@ -181,3 +182,99 @@ int com_rsa_send_aeskey(int sockfd,char *pub_key,unsigned char *aes_key,int n_bi
     }
     return 1;
 }
+
+
+/* 函数名: int com_pipe_rd_data(int rdfd,char *rd_buf,int buf_size)
+ * 功能: 从管道中读取数据,以\n为分割
+ * 参数: int rdfd,管道描述符
+ *       char *rd_buf,读取缓存
+ *       int buf_size,缓存大小
+ * 返回值: -1,读取出错
+ *         >0,实际读取大小
+ */
+int com_pipe_rd_data(int rdfd,char *rd_buf,int buf_size){
+    char recv_c;
+    int n = 0;   //记录接收的字符数,超过size则报错退出
+    //设置接收超时
+    while(1){
+        if(read(rdfd,&recv_c,1) <= 0){
+            syslog(LOG_DEBUG,"recv string failed:%s",strerror(errno));
+            return -1;
+        }
+        if(recv_c == '\n'){  //换行符表示结束
+            //rd_buf[n] = 0;
+            return n;
+        }else if(recv_c == '\r'){
+            n = 0;
+        }else{  
+            if(recv_c == 0x10){  //为转义符号,说明下一个字符为数据，不是控制字符
+                if(read(rdfd,&recv_c,1) <= 0){
+                    syslog(LOG_DEBUG,"comunication recv str failed:%s",strerror(errno));
+                    return -1;
+                }
+                if(n >= buf_size){
+                    return -1;
+                }
+                rd_buf[n++] = recv_c;
+            }else{
+                if(n >= buf_size){
+                    return -1;
+                }
+                rd_buf[n++] = recv_c;
+            }
+        }
+    }
+    return n;
+}
+
+
+/* 函数名: int com_pipe_wr_data(int wrfd,char *wr_buf,int wr_size)
+ * 功能: 往管道写数据
+ * 参数: int wrfd,写管道描述符
+ *       char *wr_buf,保存需要发送的数据的缓冲区
+ *       int wr_size,发送数据的大小,注意,大小不能超过发送缓冲区
+ * 返回值: -1,失败
+ *          1,成功
+ */
+int com_pipe_wr_data(int wrfd,char *wr_buf,int wr_size){
+    int index = 0;
+    int buf_size = 0;
+    char send_c;
+    char send_buf[1024];
+
+
+    while(index < wr_size){
+        if(buf_size >= 1023){  //分段发送
+            if(write(wrfd,send_buf,buf_size) < 0){
+                syslog(LOG_DEBUG,"com_pipe_wr_data()error:%s",strerror(errno));
+                return -1;
+            }
+            buf_size = 0;
+        }
+        send_c = wr_buf[index++];
+        //控制字符要加上链路转义字符，以实现透明传输
+        if(send_c == 0x10 || send_c == '\r' || send_c == '\n'){
+            send_buf[buf_size++] = 0x10;
+            send_buf[buf_size++] = send_c;
+        }else{
+            send_buf[buf_size++] = send_c;
+        }
+    }
+    if(buf_size >= 1023){  //分段发送
+        if(write(wrfd,send_buf,buf_size) < 0){
+            syslog(LOG_DEBUG,"com_pipe_wr_data()error:%s",strerror(errno));
+            return -1;
+        }
+        buf_size = 0;
+    }
+    send_buf[buf_size++] = '\n';
+    send_buf[buf_size++] = '\r';
+    if(write(wrfd,send_buf,buf_size) < 0){
+        syslog(LOG_DEBUG,"com_pipe_wr_data() error:%s",strerror(errno));
+        return -1;
+    }
+    return 1;
+}
+
+
+

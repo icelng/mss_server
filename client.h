@@ -1,17 +1,17 @@
 #include "arpa/inet.h"
 #include "semaphore.h"  //使用信号量
 #include "list.h"
-#include "rsa.h"
+#include "encdec.h"
 
 #define CLIENT_NAME_LENGTH 32
 #define MAX_PASSWD_LENGTH 32
 #define MAX_QUERY_STR_LENGTH 128
-#define WD_RESUME_CNT 10
+#define WD_RESUME_CNT 10000
 #define VERIFY_TIMEOUT 5
 #define CLIENT_AES_KEY_LENGTH 128
 #define CLIENT_MAX_EPOLL_EVENTS 64
 #define CLIENT_RECV_BUF_SIZE 4096
-#define CLIENT_MSGTEXT_LENGTH 4096
+#define CLIENT_MSGTEXT_LENGTH 4
 #define CLIENT_DEC_MSQ_KEY 666
 #define CLIENT_INFOTYPE_L 32
 #define CLIENT_INFOCONTENT_L 4064
@@ -29,8 +29,10 @@ struct client_info{
     int queote_cnt; //客户端信息被引用次数
     sem_t queote_cnt_mutex;  //互斥访问客户端信息的引用次数
     sem_t del_enable;   //删除使能，，只有在拿到这个锁的时候，才能够删除该结构体
+    int msg_cnt;  //报文计数
     char recv_buf[CLIENT_RECV_BUF_SIZE];
-    int recv_index;
+    int recv_size;
+    int recv_ready;
     int recv_is_datachar;
     char pub_key[1024];  //通信所用的公钥
     char priv_key[1024];  //私钥
@@ -60,5 +62,6 @@ void *client_dec_parse_thread();
 struct client_info* client_get_ci(int client_id);
 int client_release_ci(struct client_info *p_c_i);
 int client_msq_init();
+int client_parse_do(char *info_src,struct client_info *p_c_i);
 //int client_verify(int sockfd,struct in_addr,struct verify_info); //客户端验证，验证成功返回1否则返回小于0的数
 

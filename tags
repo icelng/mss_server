@@ -1,44 +1,69 @@
 !_TAG_FILE_FORMAT	2	/extended format; --format=1 will not append ;" to lines/
-!_TAG_FILE_SORTED	1	/0=unsorted, 1=sorted, 2=foldcase/
+!_TAG_FILE_SORTED	2	/0=unsorted, 1=sorted, 2=foldcase/
 !_TAG_PROGRAM_AUTHOR	Darren Hiebert	/dhiebert@users.sourceforge.net/
 !_TAG_PROGRAM_NAME	Exuberant Ctags	//
 !_TAG_PROGRAM_URL	http://ctags.sourceforge.net	/official site/
 !_TAG_PROGRAM_VERSION	5.9~svn20110310	//
-CLIENT_NAME_LENGTH	client.h	3;"	d
-HLIST_HEAD	list.h	208;"	d
-HLIST_HEAD_INIT	list.h	207;"	d
-INIT_HLIST_HEAD	list.h	209;"	d
-INIT_HLIST_NODE	list.h	210;"	d
-INIT_LIST_HEAD	list.h	26;"	d
-LIST_HEAD	list.h	23;"	d
-LIST_HEAD_INIT	list.h	21;"	d
-LIST_POISON1	list.h	14;"	d
-LIST_POISON2	list.h	15;"	d
-MAX_RECV_STR_LENGTH	client.h	6;"	d
-VERIFY_TIMEOUT	client.h	5;"	d
-WD_RESUME_CNT	client.h	4;"	d
-_LINUX_LIST_H	list.h	3;"	d
-__client_del	client.c	/^int __client_del(struct client_info *p_client_i){$/;"	f
-__client_search	client.c	/^struct client_info* __client_search(int client_id){$/;"	f
-__hlist_del	list.h	/^static inline void __hlist_del(struct hlist_node *n)   $/;"	f
-__list_add	list.h	/^static inline void __list_add(struct list_head *new,   $/;"	f
-__list_del	list.h	/^static inline void __list_del(struct list_head * prev, struct list_head * next)   $/;"	f
-__list_for_each	list.h	163;"	d
-__list_splice	list.h	/^static inline void __list_splice(struct list_head *list,   $/;"	f
-client_create	client.c	/^int client_create(int sockfd_cntl,struct in_addr ip){$/;"	f
+aes_cbc_dec	encdec.c	/^int aes_cbc_dec(AES_KEY *dec_key,unsigned char *cipher,unsigned char *plain,int cipher_length){$/;"	f
+aes_cbc_enc	encdec.c	/^int aes_cbc_enc(AES_KEY *enc_key,unsigned char *plain,unsigned char *cipher){$/;"	f
+aes_dec_key	client.h	/^    AES_KEY aes_dec_key;   \/\/AES解密秘钥$/;"	m	struct:client_info
+aes_enc_key	client.h	/^    AES_KEY aes_enc_key;   \/\/AES加密秘钥$/;"	m	struct:client_info
+aes_gen_key	encdec.c	/^int aes_gen_key(unsigned char *aes_key,int n_bits){$/;"	f
+Base64Decode	encdec.c	/^int Base64Decode(const char *encoded, int encodedLength, char *decoded){      $/;"	f
+Base64Encode	encdec.c	/^int Base64Encode(const char *encoded, int encodedLength, char *decoded){$/;"	f
+CLIENT_AES_KEY_LENGTH	client.h	11;"	d
+client_create	client.c	/^void *client_create(void *p_client_i){$/;"	f
+client_decrypt_mutex	client.c	/^sem_t client_decrypt_mutex;$/;"	v
+CLIENT_DEC_MSQ_KEY	client.h	15;"	d
+client_dec_parse_thread	client.c	/^void *client_dec_parse_thread(){$/;"	f
+client_get_ci	client.c	/^struct client_info* client_get_ci(int client_id){$/;"	f
+client_get_passwdandkey	client.c	/^int client_get_passwdandkey(char *src_str,char *passwd,char *pub_key){$/;"	f
+client_get_usrinfo	client.c	/^int client_get_usrinfo(MYSQL *p_client_mysql,char *usr_name,struct usr_info *p_u_i){$/;"	f
+client_info	client.h	/^struct client_info{$/;"	s
+CLIENT_INFOCONTENT_L	client.h	17;"	d
+CLIENT_INFOTYPE_L	client.h	16;"	d
+client_is_recv_ready	client.c	/^int client_is_recv_ready(struct client_info *p_c_i){$/;"	f
 client_i_h	client.c	/^struct client_info client_i_h;   \/\/链表头客户端$/;"	v	typeref:struct:client_info
-client_info	client.c	/^struct client_info{$/;"	s	file:
 client_list_mutex	client.c	/^sem_t client_list_mutex;  \/\/互斥访问客户端列表$/;"	v
 client_manage_init	client.c	/^int client_manage_init(){$/;"	f
-client_recv_str	client.c	/^int client_recv_str(int sockfd,char *str,int size){$/;"	f
+CLIENT_MAX_EPOLL_EVENTS	client.h	12;"	d
+CLIENT_MSGTEXT_LENGTH	client.h	14;"	d
+client_msq_init	client.c	/^int client_msq_init(){$/;"	f
+client_mysql_connect	client.c	/^int client_mysql_connect(MYSQL *p_mysql){$/;"	f
+CLIENT_NAME_LENGTH	client.h	6;"	d
+client_parse_do	client.c	/^int client_parse_do(char *info_src,struct client_info *p_c_i){$/;"	f
+CLIENT_RECV_BUF_SIZE	client.h	13;"	d
+client_recv_thread	client.c	/^void *client_recv_thread(){$/;"	f
+client_release_ci	client.c	/^int client_release_ci(struct client_info *p_c_i){$/;"	f
 client_remove	client.c	/^int client_remove(int client_id){$/;"	f
 client_search	client.c	/^struct client_info* client_search(int client_id){$/;"	f
-client_verify	client.c	/^int client_verify(int sockfd_cntl,struct in_addr ip,struct verify_info *p_v_i){$/;"	f
-client_wd_decline	client.c	/^void client_wd_decline(){$/;"	f
+client_set_recv_ready	client.c	/^int client_set_recv_ready(struct client_info *p_c_i,int new_ready_stat){$/;"	f
+client_users_show	client.c	/^int client_users_show(MYSQL *p_client_mysql){$/;"	f
+client_verify	client.c	/^int client_verify(int sockfd,struct in_addr ip,struct usr_info *p_usr_i){$/;"	f
+client_wd_decline	client.c	/^void client_wd_decline(union sigval v){$/;"	f
 client_wd_init	client.c	/^int client_wd_init(){$/;"	f
 client_wd_resume	client.c	/^int client_wd_resume(int client_id){$/;"	f
+compilation_database_folder	.ycm_extra_conf.py	/^compilation_database_folder = ''$/;"	v
+com_recv_str	comunication.c	/^int com_recv_str(int sockfd,char *str,int size,int timeout_mode){$/;"	f
+com_rsa_recv	comunication.c	/^int com_rsa_recv(int sockfd,char *prvi_key,char *recv_buf,int buf_size,int timeout_mode){$/;"	f
+com_rsa_send	comunication.c	/^int com_rsa_send(int sockfd,char *pub_key,char *send_buf){$/;"	f
+com_rsa_send_aeskey	comunication.c	/^int com_rsa_send_aeskey(int sockfd,char *pub_key,unsigned char *aes_key,int n_bits){$/;"	f
+com_send_str	comunication.c	/^int com_send_str(int sockfd,char *send_str,int str_len){$/;"	f
 container_of	list.h	7;"	d
+database	.ycm_extra_conf.py	/^  database = None$/;"	v
+database	.ycm_extra_conf.py	/^  database = ycm_core.CompilationDatabase( compilation_database_folder )$/;"	v
+del_enable	client.h	/^    sem_t del_enable;   \/\/删除使能，，只有在拿到这个锁的时候，才能够删除该结构体$/;"	m	struct:client_info
+DirectoryOfThisScript	.ycm_extra_conf.py	/^def DirectoryOfThisScript():$/;"	f
+encdec_init	encdec.c	/^int encdec_init(){$/;"	f
 first	list.h	/^struct hlist_node *first;   $/;"	m	struct:hlist_head	typeref:struct:hlist_head::hlist_node
+flags	.ycm_extra_conf.py	/^flags = [$/;"	v
+FlagsForFile	.ycm_extra_conf.py	/^def FlagsForFile( filename, **kwargs ):$/;"	f
+getCipherRealLenByPriKey	encdec.c	/^int getCipherRealLenByPriKey(int priKeyLen){$/;"	f
+GetCompilationInfoForFile	.ycm_extra_conf.py	/^def GetCompilationInfoForFile( filename ):$/;"	f
+getEncryptLengthByPubKey	encdec.c	/^int getEncryptLengthByPubKey(int pubKeyLen){$/;"	f
+g_client_mysql	client.c	/^MYSQL g_client_mysql;   \/\/客户端数据库$/;"	v
+g_msqid_dec	client.c	/^int g_msqid_dec;   \/\/解密线程所需要的消息队列ID$/;"	v
+g_socket_epoll_fd	client.c	/^int g_socket_epoll_fd;$/;"	v
 hlist_add_after	list.h	/^static inline void hlist_add_after(struct hlist_node *n,   $/;"	f
 hlist_add_before	list.h	/^static inline void hlist_add_before(struct hlist_node *n,   $/;"	f
 hlist_add_head	list.h	/^static inline void hlist_add_head(struct hlist_node *n, struct hlist_head *h)   $/;"	f
@@ -53,13 +78,18 @@ hlist_for_each_entry_from	list.h	300;"	d
 hlist_for_each_entry_safe	list.h	305;"	d
 hlist_for_each_safe	list.h	284;"	d
 hlist_head	list.h	/^struct hlist_head {   $/;"	s
+HLIST_HEAD	list.h	208;"	d
+HLIST_HEAD_INIT	list.h	207;"	d
 hlist_node	list.h	/^struct hlist_node {   $/;"	s
 hlist_unhashed	list.h	/^static inline int hlist_unhashed(const struct hlist_node *h)   $/;"	f
-id	client.c	/^    int id;  \/\/客户端的ID$/;"	m	struct:client_info	file:
-id	client.h	/^    int id;$/;"	m	struct:verify_info
-ip	client.c	/^    struct in_addr ip;   \/\/客户端IP$/;"	m	struct:client_info	typeref:struct:client_info::in_addr	file:
-list	client.c	/^    struct list_head list;  \/\/链表$/;"	m	struct:client_info	typeref:struct:client_info::list_head	file:
-list_add	list.h	/^static inline void list_add(struct list_head *new, struct list_head *head)   $/;"	f
+id	client.c	/^    int id;$/;"	m	struct:usr_info	file:
+id	client.h	/^    int id;  \/\/客户端的ID$/;"	m	struct:client_info
+INIT_HLIST_HEAD	list.h	209;"	d
+INIT_HLIST_NODE	list.h	210;"	d
+INIT_LIST_HEAD	list.h	26;"	d
+ip	client.h	/^    struct in_addr ip;   \/\/客户端IP$/;"	m	struct:client_info	typeref:struct:client_info::in_addr
+IsHeaderFile	.ycm_extra_conf.py	/^def IsHeaderFile( filename ):$/;"	f
+list	client.h	/^    struct list_head list;  \/\/链表$/;"	m	struct:client_info	typeref:struct:client_info::list_head
 list_add_tail	list.h	/^static inline void list_add_tail(struct list_head *new, struct list_head *head)   $/;"	f
 list_del	list.h	/^static inline void list_del(struct list_head *entry)   $/;"	f
 list_del_init	list.h	/^static inline void list_del_init(struct list_head *entry)   $/;"	f
@@ -74,28 +104,72 @@ list_for_each_entry_safe	list.h	192;"	d
 list_for_each_prev	list.h	166;"	d
 list_for_each_safe	list.h	170;"	d
 list_head	list.h	/^struct list_head {   $/;"	s
+LIST_HEAD	list.h	23;"	d
+LIST_HEAD_INIT	list.h	21;"	d
 list_move	list.h	/^static inline void list_move(struct list_head *list, struct list_head *head)   $/;"	f
 list_move_tail	list.h	/^static inline void list_move_tail(struct list_head *list,   $/;"	f
+LIST_POISON1	list.h	14;"	d
+LIST_POISON2	list.h	15;"	d
 list_prepare_entry	list.h	184;"	d
 list_splice	list.h	/^static inline void list_splice(struct list_head *list, struct list_head *head)   $/;"	f
 list_splice_init	list.h	/^static inline void list_splice_init(struct list_head *list,   $/;"	f
 log_init	server-init.c	/^int log_init(){$/;"	f
-lv	client.c	/^    int lv;   \/\/客户端级别(0,1,2,0是最高级,可使用所有的指令),级别决定各种权限$/;"	m	struct:client_info	file:
-lv	client.h	/^    int lv;$/;"	m	struct:verify_info
+lv	client.c	/^    int lv;$/;"	m	struct:usr_info	file:
+lv	client.h	/^    int lv;   \/\/客户端级别(0,1,2,0是最高级,可使用所有的指令),级别决定各种权限$/;"	m	struct:client_info
 main	main.c	/^int main(){$/;"	f
-name	client.c	/^    char name[CLIENT_NAME_LENGTH];  \/\/客户端名称$/;"	m	struct:client_info	file:
-name	client.h	/^    char name[CLIENT_NAME_LENGTH];$/;"	m	struct:verify_info
+MakeRelativePathsInFlagsAbsolute	.ycm_extra_conf.py	/^def MakeRelativePathsInFlagsAbsolute( flags, working_directory ):$/;"	f
+MAX_PASSWD_LENGTH	client.h	7;"	d
+MAX_QUERY_STR_LENGTH	client.h	8;"	d
+MAX_RECV_STR_LENGTH	comunication.h	2;"	d
+msg_struct	client.c	/^struct msg_struct{$/;"	s	file:
+msg_text	client.c	/^    char msg_text[16];$/;"	m	struct:msg_struct	file:
+msg_type	client.c	/^    long msg_type;$/;"	m	struct:msg_struct	file:
+my_list_add	list.h	/^static inline void my_list_add(struct list_head *new, struct list_head *head)   $/;"	f
+name	client.c	/^    char name[CLIENT_NAME_LENGTH];$/;"	m	struct:usr_info	file:
+name	client.h	/^    char name[CLIENT_NAME_LENGTH];  \/\/客户端名称$/;"	m	struct:client_info
 next	list.h	/^struct hlist_node *next, **pprev;   $/;"	m	struct:hlist_node	typeref:struct:hlist_node::hlist_node
 next	list.h	/^struct list_head *next, *prev;   $/;"	m	struct:list_head	typeref:struct:list_head::list_head
+objs	Makefile	/^objs = main.o client.o server-init.o comunication.o encdec.o$/;"	m
 offsetof	list.h	5;"	d
+passwd	client.c	/^    char passwd[MAX_PASSWD_LENGTH];$/;"	m	struct:usr_info	file:
 pprev	list.h	/^struct hlist_node *next, **pprev;   $/;"	m	struct:hlist_node	typeref:struct:hlist_node::
 prefetch	list.h	/^static inline void prefetch(const void *x) {;}   $/;"	f
 prefetchw	list.h	/^static inline void prefetchw(const void *x) {;}   $/;"	f
 prev	list.h	/^struct list_head *next, *prev;   $/;"	m	struct:list_head	typeref:struct:list_head::
+PrivKeyPEMFormat	encdec.c	/^void PrivKeyPEMFormat(char *privkey){$/;"	f
+priv_key	client.c	/^    char priv_key[1024];  \/\/私钥$/;"	m	struct:usr_info	file:
+priv_key	client.h	/^    char priv_key[1024];  \/\/私钥$/;"	m	struct:client_info
+PubKeyPEMFormat	encdec.c	/^void PubKeyPEMFormat(char *pubkey)$/;"	f
+pub_key	client.c	/^    char pub_key[1024];  \/\/通信所用的公钥$/;"	m	struct:usr_info	file:
+pub_key	client.h	/^    char pub_key[1024];  \/\/通信所用的公钥$/;"	m	struct:client_info
+queote_cnt	client.h	/^    int queote_cnt; \/\/客户端信息被引用次数$/;"	m	struct:client_info
+queote_cnt_mutex	client.h	/^    sem_t queote_cnt_mutex;  \/\/互斥访问客户端信息的引用次数$/;"	m	struct:client_info
+recv_buf	client.h	/^    char recv_buf[CLIENT_RECV_BUF_SIZE];$/;"	m	struct:client_info
+recv_is_datachar	client.h	/^    int recv_is_datachar;$/;"	m	struct:client_info
+recv_ready	client.h	/^    int recv_ready;$/;"	m	struct:client_info
+recv_size	client.h	/^    int recv_size;$/;"	m	struct:client_info
+RECV_TIMEOUT_SEC	comunication.h	3;"	d
+rsa_gen_keys	encdec.c	/^int rsa_gen_keys(const int g_nbits,char *pub_key,char *priv_key){$/;"	f
+RSA_KEY_LENGTH	encdec.h	7;"	d
+rsa_priv_decrypt	encdec.c	/^int rsa_priv_decrypt(char *privkey,char *cipher,char *out_plain){$/;"	f
+rsa_pub_encrypt	encdec.c	/^int rsa_pub_encrypt(char *pubkey,char *in_plain,char *cipher){$/;"	f
 server_addr	server-init.c	/^struct sockaddr_in server_addr;$/;"	v	typeref:struct:sockaddr_in
 server_socket_create	server-init.c	/^int server_socket_create(int *p_server_sockfd,int port){$/;"	f
 server_sockfd	main.c	/^int server_sockfd;$/;"	v
-sockfd_cntl	client.c	/^    int sockfd_cntl;  \/\/客户端控制套接字,主要用来传输指令$/;"	m	struct:client_info	file:
-tid_irecv_thread	client.c	/^    unsigned long tid_irecv_thread;   \/\/指令接收线程ID$/;"	m	struct:client_info	file:
-verify_info	client.h	/^struct verify_info{  \/\/保存着验证信息$/;"	s
-wd_cnt	client.c	/^    int wd_cnt;   \/\/看门狗，，如果计时到0，则说明已经失去链接$/;"	m	struct:client_info	file:
+skfd_smutex	client.h	/^    sem_t skfd_smutex;  \/\/套接字发送锁，防止数据发送紊乱$/;"	m	struct:client_info
+sockfd	client.h	/^    int sockfd;  \/\/客户端控制套接字,主要用来传输指令$/;"	m	struct:client_info
+SOURCE_EXTENSIONS	.ycm_extra_conf.py	/^SOURCE_EXTENSIONS = [ '.cpp', '.cxx', '.cc', '.c', '.m', '.mm' ]$/;"	v
+sql_inc	Makefile	/^sql_inc = \/usr\/include\/mysql$/;"	m
+test_cnt	client.h	/^    int test_cnt;$/;"	m	struct:client_info
+usr_info	client.c	/^struct usr_info{  \/\/保存着验证信息$/;"	s	file:
+VERIFY_TIMEOUT	client.h	10;"	d
+wd_cnt	client.h	/^    int wd_cnt;   \/\/看门狗，，如果计时到0，则说明已经失去链接$/;"	m	struct:client_info
+WD_RESUME_CNT	client.h	9;"	d
+_LINUX_LIST_H	list.h	3;"	d
+__client_del	client.c	/^int __client_del(struct client_info *p_client_i){$/;"	f
+__client_search	client.c	/^struct client_info* __client_search(int client_id){$/;"	f
+__hlist_del	list.h	/^static inline void __hlist_del(struct hlist_node *n)   $/;"	f
+__list_add	list.h	/^static inline void __list_add(struct list_head *new,   $/;"	f
+__list_del	list.h	/^static inline void __list_del(struct list_head * prev, struct list_head * next)   $/;"	f
+__list_for_each	list.h	163;"	d
+__list_splice	list.h	/^static inline void __list_splice(struct list_head *list,   $/;"	f
