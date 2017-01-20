@@ -20,6 +20,7 @@
 #include "comunication.h"
 #include "unistd.h"
 #include "pthread.h"
+#include "mmpool.h"  //自己实现的简单的内存池
 
 
 
@@ -31,13 +32,21 @@ struct usr_info{  //保存着验证信息
     char pub_key[1024];  //通信所用的公钥
     char priv_key[1024];  //私钥
 };
+
+
 MYSQL g_client_mysql;   //客户端数据库
 sem_t client_list_mutex;  //互斥访问客户端列表
 int g_msqid_dec;   //解密线程所需要的消息队列ID
 struct client_info client_i_h;   //链表头客户端
 int g_socket_epoll_fd;
-int g_dec_thrd_pipfd[2];  //解密线程管道
+//解密线程管道,通过管道给aes解密线程传送客户端ID，解密线程就会把客户端的数据接收
+//缓存中的数据进行解密
+int g_dec_thrd_pipfd[2];  
+//加密线程管道,通过管道给aes加密线程传送客户端ID，加密线程就会把将要发送给客户端
+//的报文进行加密
+int g_enc_thrd_pipfd[2];   
 
+struct mm_pool_s *g_mmpl_test;
 
 
 
@@ -91,13 +100,14 @@ int client_manage_init(){
         return -1;
     }
     if(pthread_create(&tid_irecv_thread,NULL,client_recv_thread,NULL) < 0){  //创建专门接收信息的线程
-        syslog(LOG_DEBUG,"Failed to create client_recv_thread,stop create client");
+        syslog(LOG_DEBUG,"Failed to create client_recv_thread:%s",strerror(errno));
         return -1;
     }
     if(pthread_create(&tid_irecv_thread,NULL,client_dec_parse_thread,NULL) < 0){  //创建专门解密信息的线程
-        syslog(LOG_DEBUG,"Failed to create client_dec_parse_thread,stop create client");
+        syslog(LOG_DEBUG,"Failed to create client_dec_parse_thread:%s",strerror(errno));
         return -1;
     }
+    mmpl_create(&g_mmpl_test);
     return 1;
 }
 
@@ -107,8 +117,6 @@ int client_manage_init(){
  * 返回值:
  */
 int client_mysql_connect(MYSQL *p_mysql){
-    
-
     if(mysql_init(p_mysql) == NULL){   //初始化mysql
         //初始化失败
         syslog(LOG_DEBUG,"init client mysql failed:%s",mysql_error(p_mysql));
@@ -317,7 +325,8 @@ int client_get_passwdandkey(char *src_str,char *passwd,char *pub_key){
  *       2.如果用户名存在，则产生秘钥，而且与客户端交换公钥，具体步骤是：
  *          1)先给客户端发送服务端的公钥
  *          2)等待接收经过服务端公钥加密的客户端认证内容，认证内容包括:用户的密码
- *            +客户端公钥
+ *            +客户端公钥，密码是用来验证的，公钥用来在验证成功后给客户端加密发送
+ *            aes秘钥。
  *       3.验证密码
  *       4.若验证成功，则告知成功，否则告知失败，并且说明原因
  * 参数: int sockfd,客户端的控制套接字
@@ -370,9 +379,31 @@ int client_verify(int sockfd,struct in_addr ip,struct usr_info *p_usr_i){
     if(com_send_str(sockfd,send_buf,strlen(send_buf)) < 0)return -1;  //发送服务器的公钥
     return 1;
 }
-/* 函数名: void *client_recv_thread(void *arg)
- * 功能: 接收信息线程
- * 参数: void *arg,指向客户端信息结构体的指针
+
+/* 函数名: void *client_enc_thread()
+ * 功能: 通信报文加密线程，从加密线程管道中取出客户端ID，然后把将要发送给客户端的
+ *       报文进行加密，加密完了之后，释放客户端的报文加密锁，而且把已经加密好的报
+ *       文保存在客户端的发送缓存里
+ * 参数:
+ * 返回值:
+ */
+void *client_enc_thread(){
+    
+}
+
+
+/* 函数名: void *client_snd_thread()
+ * 功能: 发送数据线程
+ * 参数:
+ * 返回值:
+ */
+void *client_snd_thread(){
+    
+}
+
+/* 函数名: void *client_recv_thread()
+ * 功能: 接收数据线程  啊！突然感觉这函数好长,不是很想看到它
+ * 参数: 
  * 返回值:
  */
 void *client_recv_thread(){
@@ -487,12 +518,7 @@ void *client_dec_parse_thread(){
     int ret_value;
     int c_id;
     struct client_info *p_c_i;
-    struct rcv_msg_struct{
-        long msg_type;
-        int client_id;
-        char msg_text[32];   //这个要比发送结构体的大一点,不然会出现 stack smashing detected错误
-    }rcv_msgs;
-    char plain[MAX_RECV_STR_LENGTH];
+    struct cm_msg *msg_rcv;
     pthread_detach(pthread_self());  //线程结束时，资源由系统自动回收
     while(1){
         c_id = 0;
@@ -506,16 +532,17 @@ void *client_dec_parse_thread(){
             syslog(LOG_DEBUG,"Error c_id:%d",c_id);
         }
         p_c_i = client_get_ci(c_id);  //msg_type保存着客户端的ID 
-        //p_c_i = client_get_ci(rcv_msgs.client_id);  //msg_type保存着客户端的ID 
         if(p_c_i == NULL){
-            syslog(LOG_DEBUG,"Error:client_dec_parse()-->client_get_ci():the struct of client(id:%d) not found",rcv_msgs.client_id);
+            syslog(LOG_DEBUG,"Error:client_dec_parse()-->client_get_ci():the struct of client(id:%d) not found",c_id);
             continue;
         }
         //AES解密
-        aes_cbc_dec(&p_c_i->aes_dec_key,(unsigned char*)p_c_i->recv_buf,(unsigned char*)plain,p_c_i->recv_size);
+        msg_rcv = mmpl_getmem(g_mmpl_test,sizeof(struct cm_msg));
+        aes_cbc_dec(&p_c_i->aes_dec_key,(unsigned char*)p_c_i->recv_buf,(unsigned char*)msg_rcv,p_c_i->recv_size);
+        client_set_recv_ready(p_c_i,1);  //解密好报文之后，可以继续接收信息
         //client_parse_do(plain,p_c_i);  //可能是这个问题了,   恩，经测试，就是问题了，罪魁祸首啊！！找了差不多一天了
-        p_c_i->msg_cnt = atoi(plain);
-        client_set_recv_ready(p_c_i,1);  //测试用的语句
+        p_c_i->msg_cnt = msg_rcv->msg_cnt;
+        mmpl_rlsmem(g_mmpl_test,msg_rcv);
         client_release_ci(p_c_i);
     }
 }
@@ -649,11 +676,6 @@ int client_wd_init(){
         syslog(LOG_DEBUG,"Failed to set timer");
         return -1;
     }
-    //signal(SIGALRM,client_wd_decline);  
-    //if(setitimer(ITIMER_REAL,&tick,NULL) != 0){   
-    //    //设置定时器，类型为ITIMER_REAL(真实时间),成功设置则返回0
-    //    return -1;
-    //}
     return 1;
 }
 

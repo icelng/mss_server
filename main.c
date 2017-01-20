@@ -33,8 +33,6 @@ int main(){
     listen(server_sockfd,10);  //开始监听,最大链接客户端是10
     syslog(LOG_DEBUG,"server-socket is listening...");
 
-
-
     while(1){
         //接受客户端的连接请求
         if((client_sockfd = accept(server_sockfd,(struct sockaddr*)&client_addr,(socklen_t *)&sin_size)) < 0){
