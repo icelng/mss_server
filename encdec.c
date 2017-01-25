@@ -459,11 +459,10 @@ int aes_gen_key(unsigned char *aes_key,int n_bits){
  * 参数: 
  * 返回值:
  */
-int aes_cbc_enc(AES_KEY *enc_key,unsigned char *plain,unsigned char *cipher){
+int aes_cbc_enc(AES_KEY *enc_key,unsigned char *plain,unsigned char *cipher,int plain_length){
     unsigned char iv[AES_BLOCK_SIZE];
     memset(iv,0,AES_BLOCK_SIZE);
-    /*不知道为什么，AES加密要输入的长度需要16字节的整数倍才能够加密*/
-    AES_cbc_encrypt(plain,cipher,((strlen(plain) + 1)/16 + 1)*16,enc_key,iv,AES_ENCRYPT);
+    AES_cbc_encrypt(plain,cipher,((plain_length/16 + 1))*16,enc_key,iv,AES_ENCRYPT);
     return 1;
 }
 

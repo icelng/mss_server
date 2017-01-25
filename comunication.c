@@ -6,14 +6,80 @@
 #include "sys/time.h"
 #include "signal.h"
 #include "errno.h"   //错误号定义
-#include "semaphore.h"  //使用信号量
-#include "list.h"   //使用链表
 #include "string.h"
 #include "fcntl.h"
 #include "encdec.h"  //需要加密传输
 #include "comunication.h"
 #include "unistd.h"
+#include "mmpool.h"  //还是用了内存池
 //#include "mysql.h"
+
+
+
+/* 函数名: int com_remove_ctlsymbols(unsigned char *src,unsigned char *dst,int buf_size)
+ * 功能: 除去控制符号
+ * 参数: unsigned char *src,原数据,必须是以符号\n结束
+ *       unsigned char *dst,保存处理后数据的缓存
+ *       int buf_size,缓存大小
+ * 返回值: -1,
+ *          1,
+ */
+int com_remove_ctlsymbols(unsigned char *src,unsigned char *dst,int buf_size){
+    int  src_i,dst_i;
+    char c_tmp;
+    
+    src_i = 0;
+    dst_i = 0;
+    while(1){
+        if(dst_i >= buf_size)return -1;  //如果超出了保存处理后数据的缓存
+        c_tmp = src[src_i++];
+        if(c_tmp == '\r'){
+            dst_i = 0;
+            continue;
+        }else if(c_tmp == '\n'){
+            return dst_i;
+        }else if(c_tmp == 0x10){
+            dst[dst_i++] = src[src_i++];
+            continue;
+        }
+        dst[dst_i++] = c_tmp;
+    }
+}
+
+/* 函数名: int com_transparent(unsigned char *data_src,unsigned char *data_dst,int *size)
+ * 功能: 数据透明化，指的是加入转义符使得能够透明传输
+ * 参数: unsigned char *data_src,原数据
+ *       unsigned char *data_dst,处理后的数据
+ *       int *data_size,作为输入时，是原数据的大小；作为输出时是处理后数据的大小
+ *       int buf_size,保存处理好的数据的缓冲区的大小
+ * 返回值: -1
+ *          1
+ */
+int com_transparent(unsigned char *data_src,unsigned char *data_dst,int *data_size,int buf_size){
+    int src_index = 0;
+    int dst_index = 0;
+    int src_size;
+    unsigned char c_tmp;
+
+    src_size = *data_size;
+    data_dst[dst_index++] = '\r';
+    (*data_size)++;
+    while(src_index < src_size){
+        if(dst_index >= buf_size)return -1;
+        c_tmp = data_src[src_index++];
+        if(c_tmp == '\r' || c_tmp == '\n' || c_tmp == 0x10){
+            data_dst[dst_index++] = 0x10;
+            (*data_size)++;
+        }
+        data_dst[dst_index++] = c_tmp;
+    }
+    if(dst_index + 1 > buf_size)return -1;
+    data_dst[dst_index++] = '\n';
+    (*data_size) += 1;
+    //syslog(LOG_DEBUG,"src_size:%d,dst_size:%d",src_size,*data_size); //测试用的代码，可删去
+    return 1;
+}
+
 
 /* 函数名: int com_recv_str(int sockfd,char *str,int size)
  * 功能: 从套接字中接收一个字符串,以socket流中的/n/r为分割符号
@@ -67,7 +133,7 @@ int com_recv_str(int sockfd,char *str,int size,int timeout_mode){
     }
 }
 
-/* 函数名: int com_send_str(int sockfd,char *send_str,int size)
+/* 函数名: int com_send_data(int sockfd,char *send_str,int size)
  * 功能: 通过套接字发送字符串
  * 参数: int sockfd,发送字符串的套接字
  *       char *send_str,需要发送的字符串的指针
@@ -75,22 +141,26 @@ int com_recv_str(int sockfd,char *str,int size,int timeout_mode){
  * 返回值: -1,
  *          1,
  */
-int com_send_str(int sockfd,char *send_str,int str_len){
+int com_send_data(int sockfd,char *send_str,int data_size){
     int index = 0;
     int buf_size = 0;
+    int send_size = 0;
+    int real_snd_size = 0;
     char send_c;
     char send_buf[1024];
 
 
-    while(send_str[index] != 0 && index < str_len){
+    while(index < data_size){
         if(buf_size >= 1023){  //分段发送
-            if(send(sockfd,send_buf,buf_size,0) < 0){
+            if((real_snd_size = send(sockfd,send_buf,buf_size,0)) < 0){
+                if(errno == EWOULDBLOCK)return send_size;//如果发送缓冲区已经满了,则返回
                 syslog(LOG_DEBUG,"com_send_str error:%s",strerror(errno));
                 return -1;
             }
             buf_size = 0;
         }
         send_c = send_str[index++];
+        send_size++;
         //控制字符要加上链路转义字符，以实现透明传输
         if(send_c == 0x10 || send_c == '\r' || send_c == '\n'){
             send_buf[buf_size++] = 0x10;
@@ -101,6 +171,7 @@ int com_send_str(int sockfd,char *send_str,int str_len){
     }
     if(buf_size >= 1023){  //分段发送
         if(send(sockfd,send_buf,buf_size,0) < 0){
+            if(errno == EWOULDBLOCK)return send_size;//如果发送缓冲区已经满了,则返回
             syslog(LOG_DEBUG,"com_send_str error:%s",strerror(errno));
             return -1;
         }
@@ -150,7 +221,7 @@ int com_rsa_send(int sockfd,char *pub_key,char *send_buf){
     
     ret = rsa_pub_encrypt(pub_key,send_buf,send_cipher);
     if(ret < 0)return ret;
-    com_send_str(sockfd,send_cipher,strlen(send_cipher));
+    com_send_data(sockfd,send_cipher,strlen(send_cipher));
     if(ret < 0)return ret;
     return 1;
 }
@@ -243,6 +314,7 @@ int com_pipe_wr_data(int wrfd,char *wr_buf,int wr_size){
     char send_buf[1024];
 
 
+    send_buf[buf_size++] = '\r';
     while(index < wr_size){
         if(buf_size >= 1023){  //分段发送
             if(write(wrfd,send_buf,buf_size) < 0){
@@ -268,7 +340,6 @@ int com_pipe_wr_data(int wrfd,char *wr_buf,int wr_size){
         buf_size = 0;
     }
     send_buf[buf_size++] = '\n';
-    send_buf[buf_size++] = '\r';
     if(write(wrfd,send_buf,buf_size) < 0){
         syslog(LOG_DEBUG,"com_pipe_wr_data() error:%s",strerror(errno));
         return -1;
@@ -277,4 +348,88 @@ int com_pipe_wr_data(int wrfd,char *wr_buf,int wr_size){
 }
 
 
+
+/* 函数名: int com_msgq_create(struct msgq_s **p_new_msgq)
+ * 功能: 创建新的消息队列,因为消息队列的创建并不频繁
+ * 参数: struct msgq_s **p_new_msgq,消息队列的指针的指针
+ * 返回值: -1, 
+ *          1,
+ */
+int com_msgq_create(struct msgq_s **p_new_msgq){
+    struct mm_pool_s *mmpl = NULL;
+    if(mmpl_create(&mmpl) == -1)return -1; //创建内存池，一个消息队列使用一个内存池
+    *p_new_msgq = (struct msgq_s*)mmpl_getmem(mmpl,sizeof(struct msgq_s));
+    if(p_new_msgq == NULL)return -1;
+    INIT_LIST_HEAD(&(*p_new_msgq)->head);
+    (*p_new_msgq)->mmpl = mmpl; //依附内存池
+    sem_init(&(*p_new_msgq)->mutex,0,1);  //初始化链表互斥锁
+    sem_init(&(*p_new_msgq)->msgq_l,0,0); //初始化队列长度的信号量
+    return 1;
+}
+
+
+/* 函数名: int com_msgq_destroy(struct msgq_s *p_msgq)
+ * 功能: 销毁消息队列
+ * 参数: struct msg_s *p_msgq,消息队列结构指针
+ * 返回值: -1,
+ *          1,
+ */
+//int com_msgq_destroy(struct msgq_s *p_msgq){
+//    struct msgq_node msgq_n;
+//    return 1;
+//}
+
+/* 函数名: int com_msgq_snd(struct msgq_s *p_msgq,void *data,int msg_size)
+ * 功能: 通过消息队列发送消息
+ * 参数: struct msgq_s *p_msgq,消息队列结构体
+ *       void *data,消息的首指针
+ * 返回值: -1,
+ *          1
+ */
+int com_msgq_snd(struct msgq_s *p_msgq,void *msg_buf,unsigned int msg_size){
+    struct msgq_node *p_msgq_n;
+    void *data;
+
+    p_msgq_n = mmpl_getmem(p_msgq->mmpl,sizeof(struct msgq_node));
+    //p_msgq_n = malloc(sizeof(struct msgq_node));
+    if(p_msgq_n == NULL)return -1;
+    data = mmpl_getmem(p_msgq->mmpl,msg_size);
+    //data = malloc(msg_size);
+    if(data == NULL){
+        mmpl_rlsmem(p_msgq->mmpl,p_msgq_n);
+        //free(p_msgq_n);
+        return -1;
+    }
+    memcpy(data,msg_buf,msg_size);
+    p_msgq_n->data = data;
+    p_msgq_n->data_size = msg_size;
+    sem_wait(&p_msgq->mutex);  //互斥访问链表
+    list_add_tail(&p_msgq_n->list,&p_msgq->head);//链入队尾
+    sem_post(&p_msgq->mutex);
+    sem_post(&p_msgq->msgq_l);
+    return 1;
+}
+
+
+/* 函数名: int com_msgq_recv(struct msgq_s p_msgq,void *data)
+ * 功能: 从消息队列中获取到一条消息
+ * 参数: struct msgq_s p_msgq,消息队列结构体的指针
+ *       void *data;
+ * 返回值: -1,
+ *          1,
+ */
+int com_msgq_recv(struct msgq_s *p_msgq,void *data){
+    struct msgq_node *p_msgq_n;
+    sem_wait(&p_msgq->msgq_l);  //等待至消息队列有消息
+    sem_wait(&p_msgq->mutex);  //互斥使用消息队列
+    p_msgq_n = list_entry(p_msgq->head.next,struct msgq_node,list);
+    list_del(p_msgq->head.next);
+    sem_post(&p_msgq->mutex);  //互斥使用消息队列
+    memcpy(data,p_msgq_n->data,p_msgq_n->data_size);
+    mmpl_rlsmem(p_msgq->mmpl,p_msgq_n->data);
+    mmpl_rlsmem(p_msgq->mmpl,p_msgq_n);
+    //free(p_msgq_n->data);
+    //free(p_msgq_n);
+    return 1;
+}
 

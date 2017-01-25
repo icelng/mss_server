@@ -6,7 +6,7 @@
 #define CLIENT_NAME_LENGTH 32
 #define MAX_PASSWD_LENGTH 32
 #define MAX_QUERY_STR_LENGTH 128
-#define WD_RESUME_CNT 10
+#define WD_RESUME_CNT 30
 #define VERIFY_TIMEOUT 5
 #define CLIENT_AES_KEY_LENGTH 128
 #define CLIENT_MAX_EPOLL_EVENTS 64
@@ -20,11 +20,20 @@
 
 
 struct cm_msg{   //通信报文,cm即是comunication
-    unsigned char type;
-    unsigned short req_type;
+    unsigned int client_id; //客户端id
+    unsigned short type;
+    unsigned short req_er_type;  //请求类型或者错误类型
     unsigned int msg_cnt;
     unsigned int data_size;
     unsigned char data[CLIENT_MAX_MSG_DATA_SIZE];
+};
+
+/*发送队列*/
+struct snd_queue{
+    struct list_head queue;  //使用双向链表来作队列
+    unsigned int snd_size;
+    unsigned int snd_start;  //数据发送起始指针,用在一次发送请求无法发送完数据后再次请求发送
+    unsigned char *snd_data;
 };
 
 struct client_info{
@@ -39,16 +48,12 @@ struct client_info{
     sem_t queote_cnt_mutex;  //互斥访问客户端信息结构体的引用次数，引用次数大于零的时候，会占用删除使能锁
     sem_t del_enable;   //删除使能锁，，只有在拿到这个锁的时候，才能够删除该结构体
     int msg_cnt;  //报文计数
-    char recv_buf[CLIENT_RECV_BUF_SIZE];
+    char recv_buf[CLIENT_RECV_BUF_SIZE]; //保存着接收到的一个数据报密文的缓冲区,即将解密
     int recv_size;
     int recv_ready;
-    int recv_is_datachar;
-    struct cm_msg enc_msg;   //需要加密的信息,以后如果性能需求更高，可以设计成一个队列
-    sem_t msg_enc_mutex;  //加密锁，只有拿到锁才能够对enc_msg内容进行加密,或者修改enc_msg内容
-    char snd_buf[CLIENT_SEND_BUF_SIZE]; //也可以设计成一个队列
-    //发送锁，防止数据发送紊乱,只有拿到锁的时候，才能够往发送缓存中存储数据或者把
-    //发送缓存中的数据发送出去
-    sem_t snd_mutex;  
+    int recv_is_datachar;  //透明传输所用
+    struct list_head sndq_head; //发送队列头
+    sem_t sndq_mutex; //发送队列锁
     char pub_key[1024];  //客户端RSA公钥
     char priv_key[1024];  //对应于该客户端的服务器RSA私钥
     AES_KEY aes_enc_key;   //AES加密秘钥
@@ -68,12 +73,16 @@ struct client_info* __client_search(int client_id);   //根据客户端ID查找,
 struct client_info* client_search(int client_id);   //根据客户端ID查找,有加锁
 int client_wd_init();   //看门狗初始化
 int client_wd_resume(int client_id);
-void *client_create(void *);
+void *client_create_thread(void *);
+int client_create(int sockfd,struct sockaddr_in);
 int client_recv_str(int sockfd,char *,int);
 int client_mysql_connect();
 void client_wd_decline();   //看门狗计时器衰减,如果发现有计数到零的客户端，则删去
 void *client_recv_thread();
 void *client_dec_parse_thread();
+void *client_enc_thread();
+void *client_snd_thread();
+void *client_snd_test_thread();  //调试所需要的测试线程
 struct client_info* client_get_ci(int client_id);
 int client_release_ci(struct client_info *p_c_i);
 int client_msq_init();

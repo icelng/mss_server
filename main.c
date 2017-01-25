@@ -34,19 +34,15 @@ int main(){
     syslog(LOG_DEBUG,"server-socket is listening...");
 
     while(1){
+        memset(&client_addr,0,sizeof(struct sockaddr_in));
+        sin_size = 0;  //不知道为什么，如果不赋值1就会出现invalid argument
         //接受客户端的连接请求
         if((client_sockfd = accept(server_sockfd,(struct sockaddr*)&client_addr,(socklen_t *)&sin_size)) < 0){
             syslog(LOG_DEBUG,"accept error:%s",strerror(errno));
+            continue;
         }
         //创建客户端
-        p_client_i = (struct client_info*)malloc(sizeof(struct client_info));
-        memset(p_client_i,0,sizeof(struct client_info));
-        p_client_i->sockfd = client_sockfd;
-        p_client_i->ip = client_addr.sin_addr;
-        if((err_ret = pthread_create(&thread_id,NULL,client_create,p_client_i) < 0)){
-            syslog(LOG_DEBUG,"failed to create client:%d",err_ret);//如果失败，输出失败代码
-            free(p_client_i);
-        }
+        client_create(client_sockfd,client_addr);
     }
     return 1;
 }

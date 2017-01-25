@@ -2,6 +2,7 @@
 #include "stdlib.h"
 #include "string.h"
 #include "stdio.h"
+#include "unistd.h"
 
 
 
@@ -45,9 +46,9 @@ int mmpl_list_insert(struct mm_node *p_pre_n,struct mm_node *p_insert_n){
         return -1;
     }
     p_insert_n->next = p_pre_n->next;
-    printf("debug_test\n");
+    p_insert_n->pre = p_pre_n;
+    p_pre_n->next->pre = p_insert_n;
     p_pre_n->next = p_insert_n;
-    p_insert_n->ref = &p_pre_n->next;
     return 1;
 }
 
@@ -58,11 +59,11 @@ int mmpl_list_insert(struct mm_node *p_pre_n,struct mm_node *p_insert_n){
  *          1,
  */
 int mmpl_list_remove(struct mm_node *p_rm_node){
-    if(*p_rm_node->ref == p_rm_node){  //如果链表就只有该节点，则无法删除
+    if(p_rm_node->next == p_rm_node){  //如果链表就只有该节点，则无法删除
         return -1;
     }
-    p_rm_node->next->ref = p_rm_node->ref;
-    *p_rm_node->ref = p_rm_node->next;
+    p_rm_node->next->pre = p_rm_node->pre;
+    p_rm_node->pre->next = p_rm_node->next;
     return 1;
 }
 
@@ -81,14 +82,15 @@ void* mmpl_getmem(struct mm_pool_s *p_mmpl,unsigned int size){
 
     align_size = MMPL_ALIGN_DEFAULT(size);  //默认2K对齐
     index = align_size/MMPL_BOUNDARY_DEFAULT;
-    //printf("get index:%d\n",index);
     sem_wait(&p_mmpl->mutex);  //互斥操作内存池
     if((p_mm_n = p_mmpl->free[index]) == NULL){  
         /*如果free数组中没有相应的内存节点，则向操作系统申请*/
         p_mm_n = (struct mm_node *)malloc(align_size + sizeof(struct mm_node));
-        if(p_mm_n == NULL)return NULL; //向操作系统申请内存失败
-        p_mm_n->next = p_mm_n;
-        p_mm_n->ref = &p_mm_n->next;
+        if(p_mm_n == NULL){//向操作系统申请内存失败
+            sem_post(&p_mmpl->mutex);
+            return NULL;
+        }
+        p_mm_n->pre=p_mm_n->next = p_mm_n;
         p_mm_n->index = index;
     }else if(p_mm_n->next == p_mm_n){
         /*如果free[index](规则链表)链表只有一个节点*/
@@ -96,6 +98,7 @@ void* mmpl_getmem(struct mm_pool_s *p_mmpl,unsigned int size){
         p_mmpl->current_free_index -= index; //空闲内存空间减少
     }else{
         p_mmpl->free[index] = p_mm_n->next;
+        mmpl_list_remove(p_mm_n);
         p_mmpl->current_free_index -= index; //空闲内存空间减少
     }
     sem_post(&p_mmpl->mutex);
@@ -117,19 +120,20 @@ int mmpl_rlsmem(struct mm_pool_s *p_mmpl,void *rls_mmaddr){
 
     p_mm_n = rls_mmaddr - sizeof(struct mm_node);//获得内存节点的首地址
     index = p_mm_n->index;
-    //printf("rls index:%d\n",index);
     sem_wait(&p_mmpl->mutex);  //互斥操作内存池
     if(p_mmpl->current_free_index + index > p_mmpl->max_free_index){
         /*如果归还之后内存池的空闲空间超过了最大空闲空间大小则直接归还给操作系统*/
-        free(p_mmpl);
-        printf("free to system\n");
+        free(p_mm_n);
+        sem_post(&p_mmpl->mutex);  //互斥操作内存池
         return 1;
     }
     if(p_mmpl->free[index] == NULL){
+        p_mm_n->pre=p_mm_n->next = p_mm_n;
         p_mmpl->free[index] = p_mm_n;
     }else{
-        //printf("insert to list\n");
-        mmpl_list_insert(p_mmpl->free[index],p_mm_n);
+        if(mmpl_list_insert(p_mmpl->free[index],p_mm_n) == -1){
+            printf("error\n");
+        }
     }
     p_mmpl->current_free_index += index;
     sem_post(&p_mmpl->mutex);  //互斥操作内存池

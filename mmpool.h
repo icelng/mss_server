@@ -19,7 +19,7 @@
 /*如同Apache的内存节点*/
 struct mm_node{
     struct mm_node *next;  //下一个节点
-    struct mm_node **ref;  //指向当前节点,*ref指向前驱节点的next
+    struct mm_node *pre;  //上一个节点
     unsigned int index;  //既可以表示节点内存的大小，也可以作为free数组的下标
 
 };
