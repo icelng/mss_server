@@ -33,7 +33,6 @@ int mmpl_destroy(struct mm_pool_s *p_mmpl){
     return 1;
 }
 
-
 /* 函数名: int mmpl_list_insert(struct mm_node *pre_p_n,struct mm_node *p_insert_n)
  * 功能: 把内存节点插入到链表
  * 参数: struct mm_node *pre_p_mm_n,需要插入位置的前驱节点指针
