@@ -2,11 +2,12 @@
 #include "semaphore.h"  //使用信号量
 #include "list.h"
 #include "encdec.h"
+#include "rbtree.h"
 
 #define CLIENT_NAME_LENGTH 32
 #define MAX_PASSWD_LENGTH 32
 #define MAX_QUERY_STR_LENGTH 128
-#define WD_RESUME_CNT 30
+#define WD_RESUME_CNT 5
 #define VERIFY_TIMEOUT 5
 #define CLIENT_AES_KEY_LENGTH 128
 #define CLIENT_MAX_EPOLL_EVENTS 64
@@ -38,6 +39,7 @@ struct snd_queue{
 
 struct client_info{
     struct list_head list;  //链表
+    struct rb_node rb_n; //红黑树节点，嵌入到红黑树中
     struct in_addr ip;   //客户端IP
     char name[CLIENT_NAME_LENGTH];  //客户端名称
     int id;  //客户端的ID

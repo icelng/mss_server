@@ -45,6 +45,8 @@ struct tr_data{
 
 MYSQL g_client_mysql;   //客户端数据库
 sem_t client_list_mutex;  //互斥访问客户端列表
+sem_t g_client_rb_mutex; //客户端红黑树互斥锁
+struct rb_tree g_client_rb_t; //客户端红黑树
 int g_msqid_dec;   //解密线程所需要的消息队列ID
 struct client_info client_i_h;   //链表头客户端
 int g_socket_epoll_fd;
@@ -96,7 +98,9 @@ int client_manage_init(){
     client_i_h.id = -1;  //链表头的客户端的ID是-1
     unsigned long tid_irecv_thread;   //指令接收线程ID
     INIT_LIST_HEAD(&client_i_h.list);   //初始化客户端链表
+    rb_init(&g_client_rb_t); //初始化客户端红黑树
     sem_init(&client_list_mutex,0,1);  //初始化信号量(锁)
+    sem_init(&g_client_rb_mutex,0,1);  //初始化客户端红黑树互斥锁
     encdec_init();
     /*不吝啬地使用if来判断初始化是否成功*/
     if (client_wd_init() == -1){   //初始化看门狗
@@ -225,7 +229,7 @@ int client_users_show(MYSQL *p_client_mysql){
     syslog(LOG_DEBUG,"The total rows is:%d",rows);
     fields = mysql_num_fields(res);
     syslog(LOG_DEBUG,"The total fields is:%d",rows);
-    while(row = mysql_fetch_row(res)){
+    while((row = mysql_fetch_row(res)) != NULL){
         for(i = 0;i < fields;i++){
             syslog(LOG_DEBUG,"%s",row[i]);
         }
@@ -276,7 +280,7 @@ int client_set_recv_ready(struct client_info *p_c_i,int new_ready_stat){
  */
 struct client_info* client_get_ci(int client_id){
     struct client_info *p_c_i;
-    sem_wait(&client_list_mutex);
+    sem_wait(&g_client_rb_mutex);
     p_c_i = __client_search(client_id);
     if(p_c_i != NULL){
         sem_wait(&(p_c_i->queote_cnt_mutex));
@@ -285,7 +289,7 @@ struct client_info* client_get_ci(int client_id){
         }
         sem_post(&(p_c_i->queote_cnt_mutex));
     }
-    sem_post(&client_list_mutex);
+    sem_post(&g_client_rb_mutex);
     return p_c_i;
 }
 
@@ -722,7 +726,6 @@ void *client_snd_thread(){
             p_sndq_node->snd_size -= send_size;
             if((int)p_sndq_node->snd_size > 0){
             /*如果还没有发送完,把剩下数据的请求插入到队头*/
-                syslog(LOG_DEBUG,"gaga");
                 p_sndq_node->snd_start += send_size;
                 client_ensndq_h(p_c_i,p_sndq_node);
                 syslog(LOG_DEBUG,"debug test re_snd,start:%d total size:%d",p_sndq_node->snd_start,p_sndq_node->snd_size);
@@ -951,6 +954,7 @@ void *client_create_thread(void *p_client_i){
     }
     /*复制认证好的信息*/
     p_new_client_i->id = u_i.id;
+    p_new_client_i->rb_n.key = u_i.id; //红黑树节点的key值就是客户端ID
     strcpy(p_new_client_i->pub_key,u_i.pub_key);
     strcpy(p_new_client_i->priv_key,u_i.priv_key);
     strcpy(p_new_client_i->name,u_i.name);
@@ -968,8 +972,11 @@ void *client_create_thread(void *p_client_i){
     INIT_LIST_HEAD(&p_new_client_i->sndq_head);   //初始化发送队列
     /*链入链表*/
     sem_wait(&client_list_mutex);  //互斥访问链表
-    my_list_add(&p_new_client_i->list,&client_i_h.list);  //把新创建的客户端链入链表
+    my_list_add(&p_new_client_i->list,&client_i_h.list);//把新创建的客户端链入链表
     sem_post(&client_list_mutex);  //互斥访问链表
+    sem_wait(&g_client_rb_mutex);  //互斥访问客户端红黑树
+    rb_insert(&g_client_rb_t,&p_new_client_i->rb_n); //把新创建的客户端插入红黑树
+    sem_post(&g_client_rb_mutex);
     p_new_client_i->recv_ready = 1;  //做好接收准备
     //free(p_new_client_i); //测试用代码，可删
     //return NULL;//测试用代码，可删
@@ -988,19 +995,20 @@ void *client_create_thread(void *p_client_i){
 }
 
 /* 函数: client_info* __client_search(int client_id)
- * 功能: 根据客户端ID查找客户端，访问链表没有加锁
+ * 功能: 根据客户端ID查找客户端，访问红黑树没有加锁
  * 参数: int client_id,客户端ID
  * 返回值: NULL,查找失败
  *         非空，为客户端信息的指针
  */
 struct client_info* __client_search(int client_id){
     struct client_info *p_client_i;
-    list_for_each_entry(p_client_i,&client_i_h.list,list){  
-        if(p_client_i->id == client_id){
-            return p_client_i;
-        }
+    struct rb_node *p_rb_n;
+    p_rb_n = rb_search(&g_client_rb_t,client_id);
+    if(p_rb_n == NULL){
+        return NULL;
     }
-    return NULL;
+    p_client_i = rb_entry(p_rb_n,struct client_info,rb_n);
+    return p_client_i;
 }
 /* 函数: client_info* client_search(int client_id)
  * 功能: 根据客户端ID查找客户端,访问列表加锁
@@ -1010,9 +1018,9 @@ struct client_info* __client_search(int client_id){
  */
 struct client_info* client_search(int client_id){
     struct client_info *p_client_i;
-    sem_wait(&client_list_mutex);
+    sem_wait(&g_client_rb_mutex);
     p_client_i = __client_search(client_id);
-    sem_post(&client_list_mutex);
+    sem_post(&g_client_rb_mutex);
     return p_client_i;
 }
 /* 函数: int client_wd_resume()
@@ -1113,16 +1121,22 @@ int __client_del(struct client_info *p_client_i){
  */
 int client_remove(int client_id){
     int err_ret;
-    struct client_info *p_client_i,*n;
-    sem_wait(&client_list_mutex);  //互斥访问客户端列表
-    list_for_each_entry_safe(p_client_i,n,&client_i_h.list,list){  
-        //可以对p_client_i进行删除操作
-        if(p_client_i->id == client_id){
-            list_del(&(p_client_i->list));  //从链表移除
-        }    
+    struct client_info *p_c_i,*n;
+    struct rb_node *p_rb_n;
+    sem_wait(&g_client_rb_mutex);
+    p_rb_n = rb_search(&g_client_rb_t,client_id);
+    if(p_rb_n == NULL){
+        syslog(LOG_DEBUG,"Failed to remove client:client(id:%d) not found",client_id);
+        sem_post(&g_client_rb_mutex);
+        return -1;
     }
+    p_c_i = rb_entry(p_rb_n,struct client_info,rb_n); //得出客户端信息结构体指针
+    rb_delete(&g_client_rb_t,p_rb_n);  //移出红黑树
+    sem_post(&g_client_rb_mutex);
+    sem_wait(&client_list_mutex);  //互斥访问客户端列表
+    list_del(&p_c_i->list);  //从链表移除
     sem_post(&client_list_mutex);
-    if(err_ret = __client_del(p_client_i) < 0){  //删除客户端
+    if(err_ret = __client_del(p_c_i) < 0){  //删除客户端信息结构体
         syslog(LOG_DEBUG,"client_remove-->__client_del() error,err_ret:%d",err_ret);
         return err_ret;
     }   
@@ -1150,6 +1164,9 @@ void client_wd_decline(union sigval v){
             //计时到0且非链表头客户端,则移除客户端
             syslog(LOG_DEBUG,"client:%s timeout,removing it",p_client_i->name);
             list_del(&(p_client_i->list));  //从链表移除
+            sem_wait(&g_client_rb_mutex);
+            rb_delete(&g_client_rb_t,&p_client_i->rb_n);
+            sem_post(&g_client_rb_mutex);
             if(err_ret = __client_del(p_client_i) < 0){  //删除客户端
                 syslog(LOG_DEBUG,"client_wd_decline()-->__client_del() error,err_ret:%d",err_ret);
                 sem_post(&client_list_mutex);
