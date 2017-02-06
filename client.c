@@ -51,6 +51,7 @@ int g_msqid_dec;   //解密线程所需要的消息队列ID
 struct client_info client_i_h;   //链表头客户端
 int g_socket_epoll_fd;
 int g_socket_snd_epoll_fd;
+int g_socket_disc_epoll_fd;
 //解密线程管道,通过管道给aes解密线程传送客户端ID，解密线程就会把客户端的数据接收
 //缓存中的数据进行解密
 int g_dec_thrd_pipfd[2];  
@@ -59,6 +60,7 @@ int g_dec_thrd_pipfd[2];
 int g_enc_thrd_pipfd[2];   
 
 struct msgq_s *g_msgq_enc;
+struct msgq_s *g_msgq_del;  //客户端删除队列
 
 struct mm_pool_s *g_client_mmpl;  //客户端信息结构体所使用的内存池
 struct mm_pool_s *g_trdata_mmpl;  //传送数据所用到的内存池
@@ -118,6 +120,18 @@ int client_manage_init(){
         syslog(LOG_DEBUG,"Send epoll create error:%s",strerror(errno));
         return -1;
     }
+    if((g_socket_disc_epoll_fd = epoll_create(1)) == -1){
+        syslog(LOG_DEBUG,"Disconnect epoll create error:%s",strerror(errno));
+        return -1;
+    }
+    if(com_msgq_create(&g_msgq_enc) == -1){
+        syslog(LOG_DEBUG,"Failed to create msgq:%s",strerror(errno));
+        return -1;
+    }
+    if(com_msgq_create(&g_msgq_del) == -1){
+        syslog(LOG_DEBUG,"Failed to create delete msgq:%s",strerror(errno));
+        return -1;
+    }
     if(client_pipe_init() == -1){
         syslog(LOG_DEBUG,"Pipe init error:%s",strerror(errno));
         return -1;
@@ -128,6 +142,14 @@ int client_manage_init(){
     }
     if(pthread_create(&tid_irecv_thread,NULL,client_recv_thread,NULL) < 0){  //创建专门接收信息的线程
         syslog(LOG_DEBUG,"Failed to create client_recv_thread:%s",strerror(errno));
+        return -1;
+    }
+    if(pthread_create(&tid_irecv_thread,NULL,client_del_thread,NULL) < 0){ 
+        syslog(LOG_DEBUG,"Failed to create client_del_thread:%s",strerror(errno));
+        return -1;
+    }
+    if(pthread_create(&tid_irecv_thread,NULL,client_discnct_monitor_t,NULL) < 0){ 
+        syslog(LOG_DEBUG,"Failed to create client_discnct_monitor_t:%s",strerror(errno));
         return -1;
     }
     if(pthread_create(&tid_irecv_thread,NULL,client_dec_parse_thread,NULL) < 0){  //创建专门解密信息的线程
@@ -148,10 +170,6 @@ int client_manage_init(){
     }
     if(mmpl_create(&g_trdata_mmpl) == -1){
         syslog(LOG_DEBUG,"Failed to create the memory pool of transmit_data:%s",strerror(errno));
-        return -1;
-    }
-    if(com_msgq_create(&g_msgq_enc) == -1){
-        syslog(LOG_DEBUG,"Failed to create msgq:%s",strerror(errno));
         return -1;
     }
     return 1;
@@ -293,14 +311,14 @@ struct client_info* client_get_ci(int client_id){
     return p_c_i;
 }
 
-/* 函数名: int client_release_ci(struct client_info *p_c_i)
+/* 函数名: int client_rls_ci(struct client_info *p_c_i)
  * 功能: 释放所拿到的客户端信息结构体,与client_get_ci()成对使用,不然该客户端信息
  *       结构体无法被删除掉
  * 参数: struct client_info *p_c_i,所需释放的客户端信息结构体的指针
  * 返回值: -1,
  *          1,
  */
-int client_release_ci(struct client_info *p_c_i){
+int client_rls_ci(struct client_info *p_c_i){
     if(p_c_i == NULL){
         return -1;
     }
@@ -422,7 +440,7 @@ int client_verify(int sockfd,struct in_addr ip,struct usr_info *p_usr_i){
     }
     syslog(LOG_DEBUG,"Client login successfully");
     rsa_pub_encrypt(p_usr_i->pub_key,"Client login successfully",send_buf);
-    if(com_send_data(sockfd,send_buf,strlen(send_buf)+1) < 0)return -1;  //发送服务器的公钥
+    if(com_send_data(sockfd,send_buf,strlen(send_buf)+1) < 0)return -1;  //
     return 1;
 }
 
@@ -470,10 +488,6 @@ int client_ensndq_h(struct client_info *p_c_i,struct snd_queue *p_sndq_node){
  */
 int client_ensndq_t(struct client_info *p_c_i,struct snd_queue *p_sndq_node){
     struct epoll_event event;
-    if(p_sndq_node->snd_size < 32 || p_sndq_node->snd_size > 80){
-        syslog(LOG_DEBUG,"Error node");
-        sleep(5);
-    }
     sem_wait(&p_c_i->sndq_mutex);  //互斥访问链表
     if(p_c_i->sndq_head.next == p_c_i->sndq_head.prev){
         /*如果插入队列之前，队列是空的，则把该sockfd发送事件放入epoll。其实在发
@@ -502,31 +516,49 @@ int client_ensndq_t(struct client_info *p_c_i,struct snd_queue *p_sndq_node){
 }
 
 
-/* 函数名: int client_snd_ready(struct client_info *p_c_i,struct snd_queue *p_sndq_node)
+/* 函数名: int client_snd_ready(struct client_info *p_c_i,struct snd_queue *p_sndq_node,int enc_flag)
  * 功能: 把将要发送的数据插入发送队列,做好发送的准备
  * 参数: struct client_info *p_c_i,数据发送目的客户端的信息结构体指针
  *       struct snd_queue *p_sndq_node,需要插入的数据发送请求节点
+ *       int enc_flag,加密标志，如果为1则是加密发送，如果为0是明文发送
  * 返回值: -1,
  *          1,
  */
-int client_snd_ready(struct client_info *p_c_i,unsigned char *snd_data,unsigned int data_size){
+int client_snd_ready(struct client_info *p_c_i,unsigned char *snd_data,unsigned short data_size,unsigned int enc_flag){
     struct snd_queue *p_sndq_node;
-    unsigned char data_tr[CLIENT_SEND_BUF_SIZE];
-    int data_tr_size = data_size;
-    com_transparent(snd_data,data_tr,&data_tr_size,CLIENT_SEND_BUF_SIZE); //加入透明传输所需的控制符
+    unsigned char head_snd[4]; //真正发送的head数据
+    char syc_char = '\r';  //同步字符
+    int head_snd_size = 0;
+    int i;
+    union{
+        unsigned short u16;
+        unsigned char u8[2];
+
+    }head;
+    head.u16 = 0;
+    head.u16 = (data_size << 1) | enc_flag;
+    for(i = 0;i < 2;i++){  //透明传输head
+        if(head.u8[i] == syc_char || head.u8[i] == 0x10){
+            head_snd[head_snd_size++] = 0x10;
+        }
+        head_snd[head_snd_size++] = head.u8[i];
+    }
     p_sndq_node = mmpl_getmem(g_trdata_mmpl,sizeof(struct snd_queue));
     if(p_sndq_node == NULL){
         syslog(LOG_DEBUG,"Error:client_snd_ready()-->mmpl_getmem():%s",strerror(errno));
         return -1;
     }
-    p_sndq_node->snd_data = mmpl_getmem(g_trdata_mmpl,data_tr_size);
+    /*data_size + 4 + CLIENT_SYC_CHAR_NUM是报文大小加上head最大大小和同步字符个数*/
+    p_sndq_node->snd_data = mmpl_getmem(g_trdata_mmpl,data_size + 4 + CLIENT_SYC_CHAR_NUM);  
     if(p_sndq_node->snd_data == NULL){
         syslog(LOG_DEBUG,"Error:client_snd_ready()-->mmpl_getmem():%s",strerror(errno));
         mmpl_rlsmem(g_trdata_mmpl,p_sndq_node);
         return -1;
     }
-    memcpy(p_sndq_node->snd_data,data_tr,data_tr_size);
-    p_sndq_node->snd_size = data_tr_size;
+    memset(p_sndq_node->snd_data,syc_char,CLIENT_SYC_CHAR_NUM); //5个同步字符
+    memcpy(p_sndq_node->snd_data + CLIENT_SYC_CHAR_NUM,head_snd,head_snd_size);//head
+    memcpy(p_sndq_node->snd_data + CLIENT_SYC_CHAR_NUM + head_snd_size,snd_data,data_size);
+    p_sndq_node->snd_size = data_size + head_snd_size + CLIENT_SYC_CHAR_NUM;
     p_sndq_node->snd_start = 0;
     /*把发送请求插入到发送请求队列队尾*/
     if(client_ensndq_t(p_c_i,p_sndq_node) == -1){
@@ -545,14 +577,40 @@ int client_snd_ready(struct client_info *p_c_i,unsigned char *snd_data,unsigned 
  *       2.加密线程对数据报文进行加密
  *       3.把加密好的报文插入到客户端相应的发送队列
  *       4.在发送线程里，从客户端的发送队列取出要发送的加密报文进行发送
- * 参数: int client_id,客户端的id
- *       unsigned char *data,需要发送的数据
- *       unsigned int data_size,数据的大小
+ * 参数: unsigned char *data,需要发送的数据
+ *       int enc_flag,加密标志，1加密发送，0明文发送
  * 返回值: -1,
  *          1,
  */
-int client_snd_msg(struct cm_msg *msg){
-    return com_msgq_snd(g_msgq_enc,msg,msg->data_size + 16);
+int client_snd_msg(struct cm_msg *msg,int enc_flag){
+    struct client_info *pci;
+    unsigned short check_sum;
+    int i;
+    int msg_size;
+    int ret_val;
+    /*计算校验和*/
+    msg_size = CLIENT_MSG_SIZE(msg->data_size);
+    check_sum = 0;
+    msg->check_sum = 0;
+    for(i = 0;i < msg_size;i++){
+        check_sum += ((unsigned char*)msg)[i];
+    }
+    msg->check_sum = ~check_sum;
+    if(enc_flag == 0){
+        pci = client_get_ci(msg->client_id);
+        if(pci == NULL){
+            syslog(LOG_DEBUG,"Error:client_snd_msg():client(id:%d) not found",msg->client_id);
+            return -1;
+        }
+        ret_val = client_snd_ready(pci,(unsigned char*)msg,CLIENT_MSG_SIZE(msg->data_size),0);
+        client_rls_ci(pci);
+        return ret_val;
+    }else if(enc_flag == 1){
+        return com_msgq_snd(g_msgq_enc,msg,CLIENT_MSG_SIZE(msg->data_size));
+    }else{
+        syslog(LOG_DEBUG,"Error:client_snd_msg():invalid enc_flag");
+        return -1;
+    }
 }
 
 
@@ -570,7 +628,7 @@ void *client_enc_thread(){
     int ret_val;
 
     while(1){
-        memset(&msg,0,sizeof(struct cm_msg));
+        //memset(&msg,0,sizeof(struct cm_msg));
         ret_val = com_msgq_recv(g_msgq_enc,&msg);
         if(ret_val == -1){
             syslog(LOG_DEBUG,"Error:client_enc_thread()-->com_pipe_rd_data:%s",strerror(errno));
@@ -580,14 +638,14 @@ void *client_enc_thread(){
         p_c_i = client_get_ci(msg.client_id);
         if(p_c_i == NULL){
             syslog(LOG_DEBUG,"ERROR:client_enc_thread():client(id:%d) not found!",msg.client_id);
-            syslog(LOG_DEBUG,"Msg data:%s",msg.data);
             continue;
         }
-        aes_cbc_enc(&p_c_i->aes_enc_key,(unsigned char*)&msg,cipher,msg.data_size + 16);
-        client_snd_ready(p_c_i,cipher,SIZE_ALIGN_16B(msg.data_size + 16));  //把发送请求插入到客户端发送队列
-        client_release_ci(p_c_i);
+        aes_cbc_enc(&p_c_i->aes_enc_key,(unsigned char*)&msg,cipher,CLIENT_MSG_SIZE(msg.data_size));
+        client_snd_ready(p_c_i,cipher,SIZE_ALIGN_16B(CLIENT_MSG_SIZE(msg.data_size)),1);  //把发送请求插入到客户端发送队列
+        client_rls_ci(p_c_i);
     }
 }
+
 
 
 /* 函数名: void *client_snd_test_thread()
@@ -626,7 +684,7 @@ void *client_snd_test_thread(){
                     syslog(LOG_DEBUG,"Failed to remove sockfd from epoll:%s",strerror(errno));
                 }
                 syslog(LOG_DEBUG,"It is not EPOLLOUT event,remove sockfd from snd_epoll");
-                client_release_ci(p_c_i);
+                client_rls_ci(p_c_i);
                 continue;
             }
             p_sndq_node = client_desndq(p_c_i);
@@ -634,13 +692,13 @@ void *client_snd_test_thread(){
                 if(epoll_ctl(g_socket_snd_epoll_fd,EPOLL_CTL_DEL,p_c_i->sockfd,NULL) == -1){
                     syslog(LOG_DEBUG,"Failed to remove sockfd from epoll:%s",strerror(errno));
                 }
-                client_release_ci(p_c_i);
+                client_rls_ci(p_c_i);
                 continue;
             }
             memset(snd_data,0,CLIENT_MAX_MSG_DATA_SIZE);
             if((rcv_size = com_remove_ctlsymbols(p_sndq_node->snd_data,snd_data,CLIENT_MAX_MSG_DATA_SIZE)) == -1){
                 syslog(LOG_DEBUG,"Error in com_remove_ctlsymbols():buf size is overflow");
-                client_release_ci(p_c_i);
+                client_rls_ci(p_c_i);
                 mmpl_rlsmem(g_trdata_mmpl,p_sndq_node->snd_data);
                 mmpl_rlsmem(g_trdata_mmpl,p_sndq_node);
                 continue;
@@ -652,11 +710,41 @@ void *client_snd_test_thread(){
             //syslog(LOG_DEBUG,"Test msg:%s",msg_test.data);
             mmpl_rlsmem(g_trdata_mmpl,p_sndq_node->snd_data);
             mmpl_rlsmem(g_trdata_mmpl,p_sndq_node);
-            client_release_ci(p_c_i);
+            client_rls_ci(p_c_i);
         }
     }
 }
 
+
+
+/* 函数名: void *client_discnct_monitor_t()
+ * 功能: 断开链接监听线程
+ * 参数:
+ * 返回值:
+ */
+void *client_discnct_monitor_t(){
+    struct epoll_event events[CLIENT_MAX_EPOLL_EVENTS];
+    int c_id;
+    int n,i;
+    while(1){
+        n = epoll_wait(g_socket_disc_epoll_fd,events,CLIENT_MAX_EPOLL_EVENTS,-1);
+        if(n == -1){
+            syslog(LOG_DEBUG,"ERROR:client_snd_thread()-->epoll_wait():%s",strerror(errno));
+            sleep(1);
+            continue;
+        }
+        for(i = 0;i < n;i++){
+            c_id = events[i].data.u32;
+            if( (events[i].events & EPOLLRDHUP) ||
+                (events[i].events & EPOLLHUP) ||
+                (events[i].events & EPOLLERR)){
+                client_remove(c_id);
+                continue;
+            }
+        }
+    }
+    
+}
 
 
 /* 函数名: void *client_snd_thread()
@@ -684,19 +772,17 @@ void *client_snd_thread(){
             p_c_i = client_get_ci(c_id); //根据客户端ID获得客户端信息结构体的指针
             if(p_c_i == NULL){
                 syslog(LOG_DEBUG,"Error:client id(%d) not found!",c_id);
-                client_release_ci(p_c_i);
+                client_rls_ci(p_c_i);
                 continue;
             }
             if( (events[i].events & EPOLLHUP) ||
                 (events[i].events & EPOLLERR)){
-                if(epoll_ctl(g_socket_snd_epoll_fd,EPOLL_CTL_DEL,p_c_i->sockfd,NULL) == -1){
-                    syslog(LOG_DEBUG,"Failed to remove sockfd from epoll:%s",strerror(errno));
-                }
-                client_release_ci(p_c_i);
+                client_rls_ci(p_c_i);
+                //client_remove(c_id);
                 continue;
             }
             if(!(events[i].events & EPOLLOUT)){
-                client_release_ci(p_c_i);
+                client_rls_ci(p_c_i);
                 continue;
             }
             p_sndq_node = client_desndq(p_c_i);
@@ -705,7 +791,7 @@ void *client_snd_thread(){
                 if(epoll_ctl(g_socket_snd_epoll_fd,EPOLL_CTL_DEL,p_c_i->sockfd,NULL) == -1){
                     syslog(LOG_DEBUG,"Failed to remove sockfd from snd_epoll:%s",strerror(errno));
                 }
-                client_release_ci(p_c_i);
+                client_rls_ci(p_c_i);
                 continue;
             }
             /*非阻塞方式发送数据*/
@@ -716,7 +802,7 @@ void *client_snd_thread(){
                 syslog(LOG_DEBUG,"Error:client_snd_thread()-->send():%s",strerror(errno));
                 mmpl_rlsmem(g_trdata_mmpl,p_sndq_node->snd_data);
                 mmpl_rlsmem(g_trdata_mmpl,p_sndq_node);
-                client_release_ci(p_c_i);
+                client_rls_ci(p_c_i);
                 break;
             }
             if((errno != EWOULDBLOCK) && (p_sndq_node->snd_size != send_size)){
@@ -734,11 +820,97 @@ void *client_snd_thread(){
                 mmpl_rlsmem(g_trdata_mmpl,p_sndq_node->snd_data);
                 mmpl_rlsmem(g_trdata_mmpl,p_sndq_node);
             }
-            client_release_ci(p_c_i);
+            client_rls_ci(p_c_i);
         }
     }
     
 }
+
+
+/* 函数名: int client_recv_msg(struct client_info *pci)
+ * 功能: 负责接收报文，在线程client_recv_thread()调用
+ * 参数:
+ * 返回值:
+ */
+int client_recv_msg(struct client_info *pci){
+    int recv_size;
+    char recv_c;
+    union{
+        unsigned short u16;
+        char u8[2];
+    }head;
+    int recv_h_i = 0;
+    int recv_monitor_cnt = 0;
+
+    if(pci->msg_rcv_status == 0){
+        /*如果处于报文接收的监听状态*/
+        while(1){
+            if(recv_monitor_cnt++ == CLIENT_MAX_RECV_MONITOR_CNT){ //监听一定的字符则放弃此次监听
+                return 1;
+            }
+            if(recv(pci->sockfd,&recv_c,1,MSG_DONTWAIT) <= 0){ //非阻塞接收
+                if(errno == 11)return 1;  //errno等于11表示没有可接收的了,可以直接退出循环
+                syslog(LOG_DEBUG,"client_recv_msg:failed to recv char:%s",strerror(errno));
+                return -1;
+            }
+            if(recv_c == '\r'){
+                if(++pci->msg_rcv_ready_cnt == 3){ 
+                    /*监听到有报文发送过来*/
+                    pci->msg_rcv_ready_cnt = 0;
+                    while(1){
+                        recv(pci->sockfd,&recv_c,1,0);
+                        if(recv_c == '\r'){
+                            continue;
+                        }else if(recv_c == 0x10){ //控制字符
+                            recv(pci->sockfd,&head.u8[recv_h_i++],1,0);
+                        }else{
+                            head.u8[recv_h_i++] = recv_c;
+                        }
+                        if(recv_h_i == 2)break;
+                    }
+                    /*创建接收结构体*/
+                    pci->recv_size = head.u16 >> 1;
+                    pci->recv_buf_offset = 0;
+                    pci->p_rcv_s = mmpl_getmem(g_trdata_mmpl,pci->recv_size + sizeof(struct cm_rcv_s));
+                    if(pci->p_rcv_s == NULL){
+                        syslog(LOG_DEBUG,"Failed to get memory from g_trdata_mmpl for cm_rcv_s");
+                        return -1;
+                    }
+                    pci->p_rcv_s->msg_size = pci->recv_size;
+                    pci->p_rcv_s->is_enc = 1 & head.u16; //是否加密
+                    pci->p_rcv_s->buf = (void *)pci->p_rcv_s + sizeof(struct cm_rcv_s);
+                    pci->msg_rcv_status = 1; //设置为报文接收状态
+                    break;
+                }
+            }else{
+                //syslog(LOG_DEBUG,"gaga");
+                pci->msg_rcv_ready_cnt = 0;
+            }
+        }
+    }else{
+        /*如果处于报文接收状态*/
+        recv_size = recv(pci->sockfd,
+                         pci->p_rcv_s->buf + pci->recv_buf_offset,
+                         pci->recv_size,
+                         MSG_DONTWAIT); //非阻塞接收
+        if(recv_size == -1 && errno != 11){
+            syslog(LOG_DEBUG,"client_recv_msg():failed to recv msg:%s",strerror(errno));
+            return -1;
+        }
+        pci->recv_size -= recv_size;
+        pci->recv_buf_offset += recv_size;
+        if(pci->recv_size == 0){
+            pci->msg_rcv_status = 0; //退出报文接收状态，置为监听状态
+            client_set_recv_ready(pci,0);                      
+            if(com_pipe_wr_data(g_dec_thrd_pipfd[1],(char*)&pci->id,sizeof(pci->id)) == -1){
+                syslog(LOG_DEBUG,"ERROR:client_recv_thread()-->com_pipe_wr_data():%s",strerror(errno));
+            }
+        }
+    }
+    return 1;
+}
+
+
 
 /* 函数名: void *client_recv_thread()
  * 功能: 接收数据线程  啊！突然感觉这函数好长,不是很想看到它  总有一天我会改掉它的
@@ -746,16 +918,11 @@ void *client_snd_thread(){
  * 返回值:
  */
 void *client_recv_thread(){
-    int oldtype;
     int n,i;
-    int flags;
     int c_id;
-    char recv_c;
-    struct cm_msg msg;
     struct epoll_event events[CLIENT_MAX_EPOLL_EVENTS];
     struct client_info *p_c_i;
     syslog(LOG_DEBUG,"Start client_recv_thread");
-    pthread_setcancelstate(PTHREAD_CANCEL_ENABLE,&oldtype);  //设置线程可取消
     while(1){
         n = epoll_wait(g_socket_epoll_fd,events,CLIENT_MAX_EPOLL_EVENTS,-1);
         if(n == -1){
@@ -767,65 +934,30 @@ void *client_recv_thread(){
             //获取到可读的sockfd对应的客户端信息结构体的指针
             c_id = events[i].data.u32;  //获得客户端ID
             p_c_i = client_get_ci(c_id);  //根据客户端ID获取到信息结构体的指针
-            if( (events[i].events & EPOLLHUP) ||
-                (events[i].events & EPOLLERR)){
-                if(epoll_ctl(g_socket_epoll_fd,EPOLL_CTL_DEL,p_c_i->sockfd,NULL) == -1){
-                    syslog(LOG_DEBUG,"Failed to remove sockfd from epoll:%s",strerror(errno));
-                }
-                client_release_ci(p_c_i);
-                continue;
-            }
-            if(!(events[i].events & EPOLLIN)){//EPOLLIN是包括socket正常关闭的
-                client_release_ci(p_c_i);
-                continue;
-            }
             if(p_c_i == NULL){
                 syslog(LOG_DEBUG,"ERROR:Client_recv_thread()-->client_get_ci():struct_info of client(id:%d) not found",c_id);
                 continue;
             }
-            if(client_is_recv_ready(p_c_i) == 0){  //客户端还未准备好接收数据
-                client_release_ci(p_c_i);
+            if( (events[i].events & EPOLLHUP) ||
+                (events[i].events & EPOLLERR)){
+                client_rls_ci(p_c_i);
+                client_remove(c_id);
                 continue;
             }
-            flags = fcntl(p_c_i->sockfd,F_GETFL,0);
-            fcntl(p_c_i->sockfd,F_SETFL,flags&O_NONBLOCK);  //设置成非阻塞模式
-            while(1){
-                if(recv(p_c_i->sockfd,&recv_c,1,MSG_DONTWAIT) <= 0){ //非阻塞接收
-                    if(errno == 11)break;  //errno等于11表示没有可接收的了,可以直接退出循环
-                    syslog(LOG_DEBUG,"client_recv_thread():failed to recv char:%s",strerror(errno));
-                    break;
+            if(!(events[i].events & EPOLLIN)){
+                if(epoll_ctl(g_socket_epoll_fd,EPOLL_CTL_DEL,p_c_i->sockfd,NULL) == -1){
+                    syslog(LOG_DEBUG,"Failed to remove sockfd from epoll:%s",strerror(errno));
                 }
-                if(recv_c == '\n' && p_c_i->recv_is_datachar != 1){  //换行符表示结束
-                    p_c_i->recv_buf[p_c_i->recv_size] = 0;
-                    p_c_i->recv_is_datachar = 0;
-                    //设置不可接收数据,一定要在把接收到的数据送到其他线程处理之前设置
-                    client_set_recv_ready(p_c_i,0);                      
-                    if(com_pipe_wr_data(g_dec_thrd_pipfd[1],(char*)&p_c_i->id,sizeof(p_c_i->id)) == -1){
-                        syslog(LOG_DEBUG,"ERROR:client_recv_thread()-->com_pipe_wr_data():%s",strerror(errno));
-                        client_set_recv_ready(p_c_i,1);
-                    }
-                    break;
-                }else if(recv_c == '\r' && p_c_i->recv_is_datachar != 1){
-                    p_c_i->recv_size = 0;
-                }else{  
-                    if(recv_c == 0x10 && p_c_i->recv_is_datachar != 1){  //为转义符号,说明下一个字符为数据，不是控制字符
-                        p_c_i->recv_is_datachar = 1;
-                    }else{
-                        if(p_c_i->recv_is_datachar == 1){
-                            p_c_i->recv_is_datachar = 0;
-                        }
-                        if(p_c_i->recv_size >= CLIENT_RECV_BUF_SIZE - 1){
-                            p_c_i->recv_size = 0;
-                            p_c_i->recv_is_datachar = 1;
-                            syslog(LOG_DEBUG,"The recv_buf of client is overflow!");
-                            break;
-                        }
-                        p_c_i->recv_buf[p_c_i->recv_size++] = recv_c;
-                    }
-                }
+                client_rls_ci(p_c_i);
+                continue;
+                
             }
-            fcntl(p_c_i->sockfd,F_SETFL,flags&~O_NONBLOCK);  //设置成阻塞模式
-            client_release_ci(p_c_i); //释放信息结构体
+            if(client_is_recv_ready(p_c_i) == 0){  //客户端还未准备好接收数据
+                client_rls_ci(p_c_i);
+                continue;
+            }
+            client_recv_msg(p_c_i);  //监听或者接收报文(非阻塞)
+            client_rls_ci(p_c_i); //释放信息结构体
         }
     }
 }
@@ -859,9 +991,8 @@ int client_parse_do(char *info_src,struct client_info *p_c_i){
 void *client_dec_parse_thread(){
     int ret_value;
     int c_id;
-    struct client_info *p_c_i;
+    struct client_info *pci;
     struct cm_msg msg;
-    pthread_detach(pthread_self());  //线程结束时，资源由系统自动回收
     while(1){
         c_id = 0;
         ret_value = com_pipe_rd_data(g_dec_thrd_pipfd[0],(char *)&c_id,sizeof(int));
@@ -870,34 +1001,53 @@ void *client_dec_parse_thread(){
             sleep(1);
             continue;
         }
-        p_c_i = client_get_ci(c_id);  //msg_type保存着客户端的ID 
-        if(p_c_i == NULL){
+        pci = client_get_ci(c_id);  //msg_type保存着客户端的ID 
+        if(pci == NULL){
             syslog(LOG_DEBUG,"Error:client_dec_parse()-->client_get_ci():the struct of client(id:%d) not found",c_id);
             continue;
         }
         //AES解密
-        aes_cbc_dec(&p_c_i->aes_dec_key,(unsigned char*)p_c_i->recv_buf,(unsigned char*)&msg,p_c_i->recv_size);
-        client_set_recv_ready(p_c_i,1);  //解密好报文之后，可以继续接收信息
-        if(msg.client_id != c_id){
+        memset(&msg,0,sizeof(struct cm_msg));
+        aes_cbc_dec(&pci->aes_dec_key,(unsigned char*)pci->p_rcv_s->buf,(unsigned char*)&msg,pci->p_rcv_s->msg_size);
+        mmpl_rlsmem(g_trdata_mmpl,pci->p_rcv_s);
+        syslog(LOG_DEBUG,"Msg data:%s",msg.data);
+        syslog(LOG_DEBUG,"Msg cnt:%d",msg.msg_cnt);
+        client_set_recv_ready(pci,1);  //解密好报文之后，可以继续接收信息
+        if((int)msg.client_id != c_id){
             syslog(LOG_DEBUG,"Msg error:client_id:%d,msg_cnt:%d",msg.client_id,msg.msg_cnt);
         }
-        if((p_c_i->msg_cnt != msg.msg_cnt) || (p_c_i->id != c_id)){  
-            /*如果报文计数不符,或者报文的ID不符,则回送错误报文*/
-            syslog(LOG_DEBUG,"Msg cnt error");
-            msg.client_id = c_id;
-            msg.type = 1;  
-            msg.req_er_type = 1; //报文错误类型
-            msg.data_size = 4;
-            *(int*)msg.data = p_c_i->msg_cnt;  //应该发送过来的报文计数
-            client_snd_msg(&msg);
-            client_release_ci(p_c_i);
-            continue;
+        if(msg.type == 4){
+            client_wd_resume(c_id);
+        }else if(msg.type == 2){
+            switch(msg.req_er_type){
+                case 1:
+                    msg.msg_cnt = pci->msg_cnt++;
+                    strcpy((char *)msg.data,"You have not the permission of knowing that!");
+                    msg.data_size = strlen((char *)msg.data) + 1;
+                    client_snd_msg(&msg,1);
+                    break;
+                case 2:
+                    break;
+                case 4:
+                    client_rls_ci(pci);
+                    client_remove(msg.client_id);
+                    break;
+
+            }
         }
-        msg.msg_cnt = p_c_i->msg_cnt++;
-        strcpy((char *)msg.data,"You have not the permission of knowing that!");
-        msg.data_size = strlen((char *)msg.data) + 1;
-        client_snd_msg(&msg);
-        client_release_ci(p_c_i);
+        //if((pci->msg_cnt != (int)msg.msg_cnt) || (pci->id != c_id)){  
+        //    /*如果报文计数不符,或者报文的ID不符,则回送错误报文*/
+        //    syslog(LOG_DEBUG,"Msg cnt error");
+        //    msg.client_id = c_id;
+        //    msg.type = 1;  
+        //    msg.req_er_type = 1; //报文错误类型
+        //    msg.data_size = 4;
+        //    *(int*)msg.data = pci->msg_cnt;  //应该发送过来的报文计数
+        //    client_snd_msg(&msg);
+        //    client_rls_ci(pci);
+        //    continue;
+        //}
+        client_rls_ci(pci);
     }
 }
 
@@ -945,7 +1095,6 @@ void *client_create_thread(void *p_client_i){
     struct epoll_event event;
     unsigned char aes_key[CLIENT_AES_KEY_LENGTH];
     int err_ret;
-    pthread_detach(pthread_self());  //线程结束时，资源由系统自动回收
     p_new_client_i = (struct client_info*)p_client_i;
     if((err_ret = client_verify(p_new_client_i->sockfd,p_new_client_i->ip,&u_i)) < 0){  //验证客户端
         shutdown(p_new_client_i->sockfd,2);  //关闭套接字
@@ -990,6 +1139,15 @@ void *client_create_thread(void *p_client_i){
         syslog(LOG_DEBUG,"Failed to add sockfd to epoll:%s",strerror(errno));
         return NULL;
     }
+    event.data.u32 = u_i.id;  
+    event.events = EPOLLRDHUP|EPOLLET;  
+    if(epoll_ctl(g_socket_disc_epoll_fd,
+                EPOLL_CTL_ADD,
+                p_new_client_i->sockfd,
+                &event) == -1){  //把客户端的socket加入epoll
+        syslog(LOG_DEBUG,"Failed to add sockfd to disconnect epoll:%s",strerror(errno));
+        return NULL;
+    }
     syslog(LOG_DEBUG,"Client:%s create complete!",p_new_client_i->name);
     return &*p_client_i;
 }
@@ -1030,14 +1188,23 @@ struct client_info* client_search(int client_id){
  *          1,喂狗成功
  */
 int client_wd_resume(int client_id){
-    struct client_info *p_client_i;
+    struct client_info *pci;
+    struct cm_msg heart_beat_msg;
     sem_wait(&client_list_mutex);  //互斥访问客户端列表
-    p_client_i = __client_search(client_id);  //__client_search(client_id),是内部调用函数，函数的中访问链表没有加锁
-    if(p_client_i == NULL){
+    pci = client_get_ci(client_id);
+    if(pci == NULL){
+        client_rls_ci(pci);
         sem_post(&client_list_mutex);
         return -1;
     }
-    p_client_i->wd_cnt = WD_RESUME_CNT;
+    printf("gaga\n");
+    fflush(stdout);
+    heart_beat_msg.type = 4;  //心跳报文
+    heart_beat_msg.client_id = client_id;
+    heart_beat_msg.data_size = 0;
+    pci->wd_cnt = WD_RESUME_CNT;
+    client_snd_msg(&heart_beat_msg,1);  //回送心跳报文
+    client_rls_ci(pci);
     sem_post(&client_list_mutex);
     return 1;
 }
@@ -1073,6 +1240,23 @@ int client_wd_init(){
     return 1;
 }
 
+
+/* 函数名: void *client_del_thread()
+ * 功能: 客户端删除线程，专门负责删除客户端信息结构体
+ * 参数:
+ * 返回值:
+ */
+void *client_del_thread(void *arg){
+    struct client_info *pci;
+    while(1){
+        com_msgq_recv(g_msgq_del,&pci);
+        if(__client_del(pci) < 0){  //删除客户端信息结构体
+            syslog(LOG_DEBUG,"Error:__client_del() error,err_ret");
+        }   
+    }
+    
+}
+
 /* 函数: int __client_del(client_info *p_client_i)
  * 功能: 根据客户端信息指针从内存上删除客户端，当然，在删除之前，把客户端相关的资
  *       源都释放掉
@@ -1098,11 +1282,14 @@ int __client_del(struct client_info *p_client_i){
     if(epoll_ctl(g_socket_snd_epoll_fd,EPOLL_CTL_DEL,p_client_i->sockfd,NULL) == -1){
         syslog(LOG_DEBUG,"Failed to remove sockfd from snd_epoll:%s",strerror(errno));
     }
+    if(epoll_ctl(g_socket_disc_epoll_fd,EPOLL_CTL_DEL,p_client_i->sockfd,NULL) == -1){
+        syslog(LOG_DEBUG,"Failed to remove sockfd from snd_epoll:%s",strerror(errno));
+    }
     if(p_client_i->sockfd != 0){
         shutdown(p_client_i->sockfd,2);  //关闭套接字
         close(p_client_i->sockfd);
     }
-    syslog(LOG_DEBUG,"cnt:%d",p_client_i->msg_cnt);//测试用的代码，可以删除
+    //syslog(LOG_DEBUG,"cnt:%d",p_client_i->msg_cnt);//测试用的代码，可以删除
     sem_wait(&p_client_i->del_enable);  //等待至可以删除
     /*释放发送队列*/
     while((p_sndq_node = client_desndq(p_client_i)) != NULL){
@@ -1136,10 +1323,7 @@ int client_remove(int client_id){
     sem_wait(&client_list_mutex);  //互斥访问客户端列表
     list_del(&p_c_i->list);  //从链表移除
     sem_post(&client_list_mutex);
-    if(err_ret = __client_del(p_c_i) < 0){  //删除客户端信息结构体
-        syslog(LOG_DEBUG,"client_remove-->__client_del() error,err_ret:%d",err_ret);
-        return err_ret;
-    }   
+    com_msgq_snd(g_msgq_del,&p_c_i,sizeof(void *));
     return 1;
 }
 
@@ -1156,7 +1340,7 @@ void client_wd_decline(union sigval v){
     sem_wait(&client_list_mutex);  //互斥访问客户端列表
     list_for_each_entry_safe(p_client_i,n,&client_i_h.list,list){  
         if(p_client_i->id == 1){
-            syslog(LOG_DEBUG,"cnt:%d",p_client_i->msg_cnt);//测试用的代码，可以删除
+            //syslog(LOG_DEBUG,"cnt:%d",p_client_i->msg_cnt);//测试用的代码，可以删除
         }
         //syslog(LOG_DEBUG,"client:%s wd_cnt:%d",p_client_i->name,p_client_i->wd_cnt);
         //可以对p_client_i进行删除操作
@@ -1167,11 +1351,7 @@ void client_wd_decline(union sigval v){
             sem_wait(&g_client_rb_mutex);
             rb_delete(&g_client_rb_t,&p_client_i->rb_n);
             sem_post(&g_client_rb_mutex);
-            if(err_ret = __client_del(p_client_i) < 0){  //删除客户端
-                syslog(LOG_DEBUG,"client_wd_decline()-->__client_del() error,err_ret:%d",err_ret);
-                sem_post(&client_list_mutex);
-                return;
-            }   
+            com_msgq_snd(g_msgq_del,&p_client_i,sizeof(void *));
         }    
     }
     sem_post(&client_list_mutex);

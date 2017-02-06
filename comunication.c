@@ -236,11 +236,11 @@ int com_rsa_send_aeskey(int sockfd,char *pub_key,unsigned char *aes_key,int n_bi
     int n = 0;
     int i;
     if(n_bits == 128){
-        n = 128;
+        n = 16;
     }else if(n_bits == 192){
-        n = 192;
+        n = 24;
     }else if(n_bits == 256){
-        n = 256;
+        n = 32;
     }else{
         return -1;
     }

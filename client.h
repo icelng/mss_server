@@ -7,27 +7,39 @@
 #define CLIENT_NAME_LENGTH 32
 #define MAX_PASSWD_LENGTH 32
 #define MAX_QUERY_STR_LENGTH 128
-#define WD_RESUME_CNT 5
+#define WD_RESUME_CNT 20
 #define VERIFY_TIMEOUT 5
 #define CLIENT_AES_KEY_LENGTH 128
 #define CLIENT_MAX_EPOLL_EVENTS 64
 #define CLIENT_RECV_BUF_SIZE 4096
 #define CLIENT_SEND_BUF_SIZE 4096
+#define CLIENT_MAX_RECV_MONITOR_CNT 64
 #define CLIENT_MAX_MSG_DATA_SIZE 4096
 #define CLIENT_MSGTEXT_LENGTH 4
 #define CLIENT_DEC_MSQ_KEY 666
 #define CLIENT_INFOTYPE_L 32
 #define CLIENT_INFOCONTENT_L 4064
+#define CLIENT_SYC_CHAR_NUM 5
 
+
+
+struct cm_rcv_s{
+    unsigned short msg_size; //报文大小
+    unsigned char is_enc; //是否加密,0不加密,1加密
+    void *buf;  //指向缓冲区
+};
 
 struct cm_msg{   //通信报文,cm即是comunication
     unsigned int client_id; //客户端id
     unsigned short type;
     unsigned short req_er_type;  //请求类型或者错误类型
     unsigned int msg_cnt;
-    unsigned int data_size;
+    unsigned short data_size;
+    unsigned short check_sum; //校验和
     unsigned char data[CLIENT_MAX_MSG_DATA_SIZE];
 };
+#define CLIENT_MSG_SIZE(msg_data_size) \
+    (sizeof(struct cm_msg) - CLIENT_MAX_MSG_DATA_SIZE + (msg_data_size))
 
 /*发送队列*/
 struct snd_queue{
@@ -50,9 +62,12 @@ struct client_info{
     sem_t queote_cnt_mutex;  //互斥访问客户端信息结构体的引用次数，引用次数大于零的时候，会占用删除使能锁
     sem_t del_enable;   //删除使能锁，，只有在拿到这个锁的时候，才能够删除该结构体
     int msg_cnt;  //报文计数
-    char recv_buf[CLIENT_RECV_BUF_SIZE]; //保存着接收到的一个数据报密文的缓冲区,即将解密
-    int recv_size;
+    struct cm_rcv_s *p_rcv_s; //指向接收缓存的结构体
+    int recv_size;  //处于报文接收状态的时候，需要接收的数据大小，直到为0时，把状态置为监听状态
+    int recv_buf_offset; //接收缓冲区的偏移地址
     int recv_ready;
+    char msg_rcv_status; //是否处于报文接收状态,1 处于报文接收状态,0 处于监听状态
+    unsigned char msg_rcv_ready_cnt; //处于监听状态的时候，计数报文接收的同步符号,同步符号计数到3，把状态置为接收状态
     int recv_is_datachar;  //透明传输所用
     struct list_head sndq_head; //发送队列头
     sem_t sndq_mutex; //发送队列锁
@@ -76,6 +91,7 @@ struct client_info* client_search(int client_id);   //根据客户端ID查找,�
 int client_wd_init();   //看门狗初始化
 int client_wd_resume(int client_id);
 void *client_create_thread(void *);
+void *client_del_thread();
 int client_create(int sockfd,struct sockaddr_in);
 int client_recv_str(int sockfd,char *,int);
 int client_mysql_connect();
@@ -85,8 +101,9 @@ void *client_dec_parse_thread();
 void *client_enc_thread();
 void *client_snd_thread();
 void *client_snd_test_thread();  //调试所需要的测试线程
+void *client_discnct_monitor_t();
 struct client_info* client_get_ci(int client_id);
-int client_release_ci(struct client_info *p_c_i);
+int client_rls_ci(struct client_info *p_c_i);
 int client_msq_init();
 int client_parse_do(char *info_src,struct client_info *p_c_i);
 //int client_verify(int sockfd,struct in_addr,struct verify_info); //客户端验证，验证成功返回1否则返回小于0的数

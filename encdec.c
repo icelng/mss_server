@@ -191,7 +191,7 @@ int getCipherRealLenByPriKey(int priKeyLen){
         SignleRealLen = 32;								
     else if(priKeyLen == 518 || priKeyLen == 522)		/*512*/
         SignleRealLen = 64;								
-    else if(priKeyLen == 912 || priKeyLen == 916)		/*1024*/
+    else if(priKeyLen == 912 || priKeyLen == 916 || priKeyLen == 920)		/*1024*/
         SignleRealLen = 128;								
     else if(priKeyLen == 1700 || priKeyLen == 1704)		/*2048*/
         SignleRealLen = 256;									
@@ -437,18 +437,18 @@ int aes_gen_key(unsigned char *aes_key,int n_bits){
     if(n_bits == 128){
         n = 16;
         for(i = 0;i < n;i++){
-            aes_key[i] = rand()%255;
+            aes_key[i] = rand()%254 + 1;
         }
     }else if(n_bits == 192){
         n = 24;
         for(i = 0;i < n;i++){
-            aes_key[i] = rand()%255;
+            aes_key[i] = rand()%254 + 1;
         }
 
     }else if(n_bits == 256){
         n = 32;
         for(i = 0;i < n;i++){
-            aes_key[i] = rand()%255;
+            aes_key[i] = rand()%254 + 1;
         }
     }
     return 1;
