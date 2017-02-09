@@ -20,6 +20,7 @@
 #define CLIENT_INFOTYPE_L 32
 #define CLIENT_INFOCONTENT_L 4064
 #define CLIENT_SYC_CHAR_NUM 5
+#define CLIENT_MAX_SNDQ_L 10
 
 
 
@@ -68,9 +69,9 @@ struct client_info{
     int recv_ready;
     char msg_rcv_status; //是否处于报文接收状态,1 处于报文接收状态,0 处于监听状态
     unsigned char msg_rcv_ready_cnt; //处于监听状态的时候，计数报文接收的同步符号,同步符号计数到3，把状态置为接收状态
-    int recv_is_datachar;  //透明传输所用
     struct list_head sndq_head; //发送队列头
     sem_t sndq_mutex; //发送队列锁
+    int sndq_l;  //发送队列长
     char pub_key[1024];  //客户端RSA公钥
     char priv_key[1024];  //对应于该客户端的服务器RSA私钥
     AES_KEY aes_enc_key;   //AES加密秘钥

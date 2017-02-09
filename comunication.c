@@ -133,6 +133,112 @@ int com_recv_str(int sockfd,char *str,int size,int timeout_mode){
     }
 }
 
+/* 函数名: int com_snd_data(int sockfd,char *snd_data,int data_size,int enc_flg)
+ * 功能: 通过套接字给对方发送数据
+ * 参数: int sockfd,套接字
+ *       char *snd_data,需要发送的数据
+ *       int data_size,发送数据大小
+ *       int enc_flg,发送的数据是否已经加密
+ * 返回值: -1,
+ *          1,
+ */
+int com_snd_data(int sockfd,char *snd_data,int data_size,int enc_flg){
+    unsigned short snd_size;
+    unsigned short real_snd_size;
+    union{
+        unsigned short u16;
+        char u8[2];
+    }head;
+    const char syc_char = '\r'; //同步符号
+    const char ctl_char = 0x10;
+    int i;
+    snd_size = data_size;
+    head.u16 = (snd_size << 1) | enc_flg; //不加密
+    for(i = 0;i < 5;i++){
+        send(sockfd,&syc_char,1,0);  //发送3个同步符号
+    }
+    for(i = 0;i < 2;i++){
+        if(head.u8[i] == syc_char){
+            send(sockfd,&ctl_char,1,0);
+            send(sockfd,&head.u8[i],1,0);
+        }else{
+            send(sockfd,&head.u8[i],1,0);
+        }
+    }
+    real_snd_size = send(sockfd,snd_data,snd_size,0); //发送报文
+    return 1;
+}
+
+/* 函数名: int com_rcv_data(int sockfd,char *rcv_buf,int buf_size)
+ * 功能: 从套接字上接收一个数据包
+ * 参数: int sockfd,套接字描述符
+ *       char *rcv_buf,接收数据的缓存
+ *       int buf_size,缓存大小
+ * 返回值: -1,接收出现了错误
+ *        >=0,实际接收大小
+ */
+int com_rcv_data(int sockfd,char *rcv_buf,int buf_size){
+    struct timeval timeout;   //设置超时用
+    unsigned short rcv_size = 0;
+    int syc_cnt = 0;  //同步计数
+    int monitor_cnt = 0; //监听字符计数
+    int h_i = 0; //接收head的index
+    union{
+        unsigned short u16;
+        unsigned char u8[2];
+    }head;
+    const char syc_c = '\r';  //同步字符
+    const char ctl_c = 0x10;  //控制字符
+    char rcv_c;
+    int rcv_status = 0;//0,处于监听状态，1处于报文接收状态
+
+    timeout.tv_sec = RECV_TIMEOUT_SEC;
+    timeout.tv_usec = 0;
+    //设置接收超时
+    setsockopt(sockfd,SOL_SOCKET,SO_RCVTIMEO,(char*)&timeout,sizeof(struct timeval));
+
+    while(1){
+        if(rcv_status == 0){  //处于报文接收状态
+            if(monitor_cnt++ == 50){ //如果监听的字符计数超过了50则退出
+                return -1;
+            }
+            if(recv(sockfd,&rcv_c,1,0) == -1){
+                return -1;
+            }
+            if(rcv_c == syc_c){
+                if(++syc_cnt == 3){  //开始接收head
+                    while(1){
+                        if(recv(sockfd,&rcv_c,1,0) == -1){
+                            return -1;
+                        }
+                        if(rcv_c == syc_c)continue;
+                        if(rcv_c == ctl_c){
+                            if(recv(sockfd,&rcv_c,1,0) == -1){
+                                return -1;
+                            }
+                        }
+                        head.u8[h_i++] = rcv_c;
+                        if(h_i == 2){
+                            rcv_status = 1;
+                            rcv_size = head.u16 << 1;
+                            if(rcv_size > buf_size)return -1;
+                            break;
+                        }
+                    }
+                }
+            }else{
+                syc_cnt = 0;
+            }
+        }else if(rcv_status == 1){
+            if(recv(sockfd,rcv_buf,rcv_size,0) == -1){
+                return -1;
+            }
+            break;
+        }
+    }
+    return 1;
+}
+
 /* 函数名: int com_send_data(int sockfd,char *send_str,int size)
  * 功能: 通过套接字发送字符串
  * 参数: int sockfd,发送字符串的套接字
@@ -221,7 +327,7 @@ int com_rsa_send(int sockfd,char *pub_key,char *send_buf){
     
     ret = rsa_pub_encrypt(pub_key,send_buf,send_cipher);
     if(ret < 0)return ret;
-    com_send_data(sockfd,send_cipher,strlen(send_cipher));
+    com_snd_data(sockfd,send_cipher,strlen(send_cipher) + 1,1);
     if(ret < 0)return ret;
     return 1;
 }

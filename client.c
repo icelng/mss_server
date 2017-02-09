@@ -283,7 +283,6 @@ int client_set_recv_ready(struct client_info *p_c_i,int new_ready_stat){
     p_c_i->recv_ready = new_ready_stat;
     if(new_ready_stat == 1){  //做好接收数据的准备
         p_c_i->recv_size = 0;
-        p_c_i->recv_is_datachar = 0;
     }
     return 1;
 }
@@ -408,21 +407,29 @@ int client_verify(int sockfd,struct in_addr ip,struct usr_info *p_usr_i){
     char send_buf[MAX_RECV_STR_LENGTH];
     char local_pub_key[4096];
     char plain[MAX_RECV_STR_LENGTH];
+    int result_value = 0;
 
     syslog(LOG_DEBUG,"ip:%s attempt to login",inet_ntoa(ip));
-    if(com_recv_str(sockfd,recv_str,MAX_RECV_STR_LENGTH,1) < 0){
+    //if(com_recv_str(sockfd,recv_str,MAX_RECV_STR_LENGTH,1) < 0){
+    //    return -1;
+    //}
+    if(com_rcv_data(sockfd,recv_str,MAX_RECV_STR_LENGTH) == -1){
+        syslog(LOG_DEBUG,"Error:failed to recv user's name,%s",strerror(errno));
         return -1;
     }
     syslog(LOG_DEBUG,"login name:%s",recv_str);
     if(client_get_usrinfo(&g_client_mysql,recv_str,p_usr_i) == -1){
         syslog(LOG_DEBUG,"Client login failed,user name:%s does not exist",recv_str);
-        if(com_send_data(sockfd,"error",strlen("error") + 1) < 0)return -1;  //发送认证失败信息
+        result_value = 29;
+        if(com_snd_data(sockfd,(char *)&result_value,sizeof(int),0) == 1)return -1;
         return -2;
     }
     syslog(LOG_DEBUG,"Genarating RSA key and share the pub key");
     rsa_gen_keys(RSA_KEY_LENGTH,local_pub_key,p_usr_i->priv_key);  //生成密钥对
-    if(com_send_data(sockfd,local_pub_key,strlen(local_pub_key) + 1) < 0)return -1;  //发送服务器的公钥
-    if(com_recv_str(sockfd,recv_str,MAX_RECV_STR_LENGTH,1) < 0){  //接收客户端认证内容的密文
+    if(com_snd_data(sockfd,local_pub_key,strlen(local_pub_key) + 1,0) == -1){
+        return -1;
+    }
+    if(com_rcv_data(sockfd,recv_str,MAX_RECV_STR_LENGTH) == -1){
         return -1;
     }
     rsa_priv_decrypt(p_usr_i->priv_key,recv_str,plain);  //解密客户端发来的认证内容
@@ -430,17 +437,19 @@ int client_verify(int sockfd,struct in_addr ip,struct usr_info *p_usr_i){
     syslog(LOG_DEBUG,"Checking the passwd of %s,login passwd:%s",p_usr_i->name,passwd);
     if(strcmp(passwd,p_usr_i->passwd) != 0){
         syslog(LOG_DEBUG,"Client login failed:incorrect passwd");
-        if(com_rsa_send(sockfd,p_usr_i->pub_key,"Client login failed:incorrect passwd") < 0)return -1;  //发送认证失败信息
+        result_value = 30;
+        if(com_snd_data(sockfd,(char *)&result_value,sizeof(int),0) == -1)return -1;
         return -3;
     }
     if(client_search(p_usr_i->id) != NULL){
         syslog(LOG_DEBUG,"Client login failed:multiple login");
-        if(com_rsa_send(sockfd,p_usr_i->pub_key,"Client login failed:multiple login") < 0)return -1;  //发送认证失败信息
+        result_value = -31;
+        if(com_snd_data(sockfd,(char *)&result_value,sizeof(int),0) == -1)return -1;
         return -4;
     }
     syslog(LOG_DEBUG,"Client login successfully");
-    rsa_pub_encrypt(p_usr_i->pub_key,"Client login successfully",send_buf);
-    if(com_send_data(sockfd,send_buf,strlen(send_buf)+1) < 0)return -1;  //
+    result_value = 1;
+    if(com_snd_data(sockfd,(char *)&result_value,sizeof(int),0) < 0)return -1;
     return 1;
 }
 
@@ -459,6 +468,7 @@ struct snd_queue* client_desndq(struct client_info *p_c_i){
         /*搞不懂vim的YouCompleteMe为嘛报list_entry出错，它看不懂宏？*/
         sndq_node = list_entry(p_c_i->sndq_head.next,struct snd_queue,queue);
         list_del(p_c_i->sndq_head.next);
+        p_c_i->sndq_l--;
     }
     sem_post(&p_c_i->sndq_mutex);
     return sndq_node;
@@ -474,6 +484,7 @@ struct snd_queue* client_desndq(struct client_info *p_c_i){
 int client_ensndq_h(struct client_info *p_c_i,struct snd_queue *p_sndq_node){
     sem_wait(&p_c_i->sndq_mutex);
     my_list_add(&p_sndq_node->queue,&p_c_i->sndq_head);
+    p_c_i->sndq_l++;
     sem_post(&p_c_i->sndq_mutex);
     return 1;
 }
@@ -511,6 +522,7 @@ int client_ensndq_t(struct client_info *p_c_i,struct snd_queue *p_sndq_node){
         //syslog(LOG_DEBUG,"Add the sockfd to epoll");
     }
     list_add_tail(&p_sndq_node->queue,&p_c_i->sndq_head); //加到发送队列的队尾
+    p_c_i->sndq_l++;
     sem_post(&p_c_i->sndq_mutex);
     return 1;
 }
@@ -579,7 +591,8 @@ int client_snd_ready(struct client_info *p_c_i,unsigned char *snd_data,unsigned 
  *       4.在发送线程里，从客户端的发送队列取出要发送的加密报文进行发送
  * 参数: unsigned char *data,需要发送的数据
  *       int enc_flag,加密标志，1加密发送，0明文发送
- * 返回值: -1,
+ * 返回值: -1,出现了一些错误
+ *         -2,发送队列太长
  *          1,
  */
 int client_snd_msg(struct cm_msg *msg,int enc_flag){
@@ -588,6 +601,16 @@ int client_snd_msg(struct cm_msg *msg,int enc_flag){
     int i;
     int msg_size;
     int ret_val;
+    pci = client_get_ci(msg->client_id);
+    if(pci == NULL){
+        syslog(LOG_DEBUG,"Error:client_snd_msg():client(id:%d) not found",msg->client_id);
+        return -1;
+    }
+    /*发送队列队长超过了CLIENT_MAX_SNDQ_L - 1,则告知繁忙*/
+    if(pci->sndq_l >= CLIENT_MAX_SNDQ_L - 1){
+        client_rls_ci(pci);
+        return -2;
+    }
     /*计算校验和*/
     msg_size = CLIENT_MSG_SIZE(msg->data_size);
     check_sum = 0;
@@ -597,18 +620,15 @@ int client_snd_msg(struct cm_msg *msg,int enc_flag){
     }
     msg->check_sum = ~check_sum;
     if(enc_flag == 0){
-        pci = client_get_ci(msg->client_id);
-        if(pci == NULL){
-            syslog(LOG_DEBUG,"Error:client_snd_msg():client(id:%d) not found",msg->client_id);
-            return -1;
-        }
         ret_val = client_snd_ready(pci,(unsigned char*)msg,CLIENT_MSG_SIZE(msg->data_size),0);
         client_rls_ci(pci);
         return ret_val;
     }else if(enc_flag == 1){
+        client_rls_ci(pci);
         return com_msgq_snd(g_msgq_enc,msg,CLIENT_MSG_SIZE(msg->data_size));
     }else{
         syslog(LOG_DEBUG,"Error:client_snd_msg():invalid enc_flag");
+        client_rls_ci(pci);
         return -1;
     }
 }
@@ -622,7 +642,7 @@ int client_snd_msg(struct cm_msg *msg,int enc_flag){
  * 返回值:
  */
 void *client_enc_thread(){
-    struct client_info *p_c_i;
+    struct client_info *pci;
     struct cm_msg msg;
     unsigned char cipher[CLIENT_MAX_MSG_DATA_SIZE];
     int ret_val;
@@ -635,14 +655,14 @@ void *client_enc_thread(){
             sleep(1);
             continue;
         }
-        p_c_i = client_get_ci(msg.client_id);
-        if(p_c_i == NULL){
+        pci = client_get_ci(msg.client_id);
+        if(pci == NULL){
             syslog(LOG_DEBUG,"ERROR:client_enc_thread():client(id:%d) not found!",msg.client_id);
             continue;
         }
-        aes_cbc_enc(&p_c_i->aes_enc_key,(unsigned char*)&msg,cipher,CLIENT_MSG_SIZE(msg.data_size));
-        client_snd_ready(p_c_i,cipher,SIZE_ALIGN_16B(CLIENT_MSG_SIZE(msg.data_size)),1);  //把发送请求插入到客户端发送队列
-        client_rls_ci(p_c_i);
+        aes_cbc_enc(&pci->aes_enc_key,(unsigned char*)&msg,cipher,CLIENT_MSG_SIZE(msg.data_size));
+        client_snd_ready(pci,cipher,SIZE_ALIGN_16B(CLIENT_MSG_SIZE(msg.data_size)),1);  //把发送请求插入到客户端发送队列
+        client_rls_ci(pci);
     }
 }
 
@@ -870,6 +890,7 @@ int client_recv_msg(struct client_info *pci){
                     }
                     /*创建接收结构体*/
                     pci->recv_size = head.u16 >> 1;
+                    if(pci->recv_size == 0)return 1; //大小是0则放弃接收
                     pci->recv_buf_offset = 0;
                     pci->p_rcv_s = mmpl_getmem(g_trdata_mmpl,pci->recv_size + sizeof(struct cm_rcv_s));
                     if(pci->p_rcv_s == NULL){
@@ -895,11 +916,14 @@ int client_recv_msg(struct client_info *pci){
                          MSG_DONTWAIT); //非阻塞接收
         if(recv_size == -1 && errno != 11){
             syslog(LOG_DEBUG,"client_recv_msg():failed to recv msg:%s",strerror(errno));
+            syslog(LOG_DEBUG,"client_id:%d",pci->id);
+            syslog(LOG_DEBUG,"Rcv buf addr:0x%x",(unsigned int)pci->p_rcv_s->buf);
+            syslog(LOG_DEBUG,"Offset:%d",(unsigned int)pci->recv_buf_offset);
             return -1;
         }
         pci->recv_size -= recv_size;
         pci->recv_buf_offset += recv_size;
-        if(pci->recv_size == 0){
+        if(pci->recv_size <= 0){  //这里一定要小于等于0，因为可能会接收过头而溢出的！
             pci->msg_rcv_status = 0; //退出报文接收状态，置为监听状态
             client_set_recv_ready(pci,0);                      
             if(com_pipe_wr_data(g_dec_thrd_pipfd[1],(char*)&pci->id,sizeof(pci->id)) == -1){
@@ -1071,7 +1095,6 @@ int client_create(int sockfd,struct sockaddr_in addr_in){
     memset(p_client_i,0,sizeof(struct client_info));
     p_client_i->sockfd = sockfd;
     p_client_i->ip = addr_in.sin_addr;
-    syslog(LOG_DEBUG,"p_client_i-->ip:%s",inet_ntoa(p_client_i->ip));
     //创建线程（要想提高性能，可以使用线程池的）
     if((err_ret = pthread_create(&thread_id,NULL,client_create_thread,p_client_i) < 0)){
         syslog(LOG_DEBUG,"Failed to create client:%s",strerror(errno));
@@ -1097,6 +1120,7 @@ void *client_create_thread(void *p_client_i){
     int err_ret;
     p_new_client_i = (struct client_info*)p_client_i;
     if((err_ret = client_verify(p_new_client_i->sockfd,p_new_client_i->ip,&u_i)) < 0){  //验证客户端
+        syslog(LOG_DEBUG,"Error:failed to verify client!");
         shutdown(p_new_client_i->sockfd,2);  //关闭套接字
         mmpl_rlsmem(g_client_mmpl,p_new_client_i);
         return NULL;

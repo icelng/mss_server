@@ -18,6 +18,7 @@
 
 /*如同Apache的内存节点*/
 struct mm_node{
+    int use_flg; //使用标志，0表示没有在使用，1表示正在被使用
     struct mm_node *next;  //下一个节点
     struct mm_node *pre;  //上一个节点
     unsigned int index;  //既可以表示节点内存的大小，也可以作为free数组的下标
@@ -35,5 +36,7 @@ struct mm_pool_s{
 };
 
 int mmpl_create(struct mm_pool_s **new_mmpl);
+int mmpl_destroy(struct mm_pool_s *p_mmpl);
 void* mmpl_getmem(struct mm_pool_s *p_mmpl,unsigned int size);
 int mmpl_rlsmem(struct mm_pool_s *p_mmpl,void *rls_mmaddr);
+int mmpl_list_remove(struct mm_node *p_rm_node);

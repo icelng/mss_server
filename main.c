@@ -20,10 +20,7 @@ int server_sockfd;
 int main(){
     int client_sockfd;
     int sin_size;
-    int err_ret;
-    pthread_t thread_id;
     struct sockaddr_in client_addr;
-    struct client_info *p_client_i;
 
 
     log_init();   //初始化syslog，以便查看调试信息
@@ -35,7 +32,7 @@ int main(){
 
     while(1){
         memset(&client_addr,0,sizeof(struct sockaddr_in));
-        sin_size = 0;  //不知道为什么，如果不赋值1就会出现invalid argument
+        sin_size = sizeof(struct sockaddr_in);  //不知道为什么，如果不赋值1就会出现invalid argument
         //接受客户端的连接请求
         if((client_sockfd = accept(server_sockfd,(struct sockaddr*)&client_addr,(socklen_t *)&sin_size)) < 0){
             syslog(LOG_DEBUG,"accept error:%s",strerror(errno));

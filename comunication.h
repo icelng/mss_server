@@ -30,3 +30,5 @@ int com_remove_ctlsymbols(unsigned char *src,unsigned char *dst,int buf_size);
 int com_msgq_create(struct msgq_s **p_new_msgq);
 int com_msgq_snd(struct msgq_s *p_msgq,void *msg_buf,unsigned int msg_size);
 int com_msgq_recv(struct msgq_s *p_msgq,void *data);
+int com_rcv_data(int sockfd,char *rcv_buf,int buf_size);
+int com_snd_data(int sockfd,char *snd_data,int data_size,int enc_flg);

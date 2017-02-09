@@ -17,6 +17,8 @@ int mmpl_create(struct mm_pool_s **new_mmpl){
     memset((void*)*new_mmpl,0,sizeof(struct mm_pool_s));
     (*new_mmpl)->max_free_index = MMPL_MAX_FREE_INDEX_DEFAULT;
     (*new_mmpl)->current_free_index = 0;
+    (*new_mmpl)->use_head.next = &((*new_mmpl)->use_head);
+    (*new_mmpl)->use_head.pre = &((*new_mmpl)->use_head);
     sem_init(&(*new_mmpl)->mutex,0,1);  //初始化锁
     return 1;
 }
@@ -30,6 +32,33 @@ int mmpl_create(struct mm_pool_s **new_mmpl){
  *          1,
  */
 int mmpl_destroy(struct mm_pool_s *p_mmpl){
+    int i;
+    struct mm_node *p_mm_n,*p_free_h;
+
+    if(p_mmpl == NULL){
+        return -1;
+    }
+    sem_wait(&p_mmpl->mutex); //互斥访问内存池
+    /*归还正在使用的内存空间给操作系统*/
+    while(p_mmpl->use_head.next != &p_mmpl->use_head){
+        p_mm_n = p_mmpl->use_head.next;
+        mmpl_list_remove(p_mm_n);
+        free(p_mm_n);
+    }
+    /*归还内存池中空闲内存空间给操作系统*/
+    for(i = 1;i < MMPL_MAX_INDEX + 1;i++){
+        p_free_h = p_mmpl->free[i];
+        if(p_free_h == NULL)continue;
+        while(p_free_h->next != p_free_h){
+            p_mm_n = p_free_h->next;
+            mmpl_list_remove(p_mm_n);
+            free(p_mm_n);
+        }
+        free(p_free_h);
+    }
+    sem_post(&p_mmpl->mutex);
+    sem_destroy(&p_mmpl->mutex);
+    free(p_mmpl);
     return 1;
 }
 
@@ -81,8 +110,11 @@ void* mmpl_getmem(struct mm_pool_s *p_mmpl,unsigned int size){
 
     align_size = MMPL_ALIGN_DEFAULT(size);  //默认2K对齐
     index = align_size/MMPL_BOUNDARY_DEFAULT;
+    if(index > MMPL_MAX_INDEX){  //如果超过MMMPL_MAX_INDEX则向操作系统要
+        index = 0;
+    }
     sem_wait(&p_mmpl->mutex);  //互斥操作内存池
-    if((p_mm_n = p_mmpl->free[index]) == NULL){  
+    if(((p_mm_n = p_mmpl->free[index]) == NULL) || index == 0){  
         /*如果free数组中没有相应的内存节点，则向操作系统申请*/
         p_mm_n = (struct mm_node *)malloc(align_size + sizeof(struct mm_node));
         if(p_mm_n == NULL){//向操作系统申请内存失败
@@ -100,6 +132,8 @@ void* mmpl_getmem(struct mm_pool_s *p_mmpl,unsigned int size){
         mmpl_list_remove(p_mm_n);
         p_mmpl->current_free_index -= index; //空闲内存空间减少
     }
+    p_mm_n->use_flg = 1; //表示正在被使用
+    mmpl_list_insert(&p_mmpl->use_head,p_mm_n); //插入到使用链表中
     sem_post(&p_mmpl->mutex);
     return (void *)p_mm_n + sizeof(struct mm_node);
 }
@@ -118,8 +152,18 @@ int mmpl_rlsmem(struct mm_pool_s *p_mmpl,void *rls_mmaddr){
     unsigned int index;
 
     p_mm_n = rls_mmaddr - sizeof(struct mm_node);//获得内存节点的首地址
+    if(p_mm_n->use_flg == 0){ //如果本来就是空闲的，则放弃回收
+        return -1;
+    }
     index = p_mm_n->index;
     sem_wait(&p_mmpl->mutex);  //互斥操作内存池
+    mmpl_list_remove(p_mm_n);  //从使用链表中移除
+    p_mm_n->use_flg = 0;
+    if(index == 0){  //如果超过了最大index，则直接还给操作系统
+        free(p_mm_n);
+        sem_post(&p_mmpl->mutex);
+        return 1;
+    }
     if(p_mmpl->current_free_index + index > p_mmpl->max_free_index){
         /*如果归还之后内存池的空闲空间超过了最大空闲空间大小则直接归还给操作系统*/
         free(p_mm_n);
