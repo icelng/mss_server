@@ -21,6 +21,7 @@
 #include "unistd.h"
 #include "pthread.h"
 #include "mmpool.h"  //自己实现的简单的内存池
+#include "tdpool.h"
 
 
 
@@ -64,6 +65,8 @@ struct msgq_s *g_msgq_del;  //客户端删除队列
 
 struct mm_pool_s *g_client_mmpl;  //客户端信息结构体所使用的内存池
 struct mm_pool_s *g_trdata_mmpl;  //传送数据所用到的内存池
+struct tdpl_s *g_tdpl_req;  //请求处理所用的线程池
+struct tdpl_s *g_tdpl_reqack; //请求响应处理所用的线程池
 
 
 
@@ -172,6 +175,16 @@ int client_manage_init(){
         syslog(LOG_DEBUG,"Failed to create the memory pool of transmit_data:%s",strerror(errno));
         return -1;
     }
+    /*创建线程池*/
+    if((g_tdpl_req = tdpl_create(CLIENT_TDPL_REQTHREAD_NUM,CLIENT_TDPL_MAX_REQQ)) == NULL){
+        syslog(LOG_DEBUG,"Failed to create thread pool of request:%s",strerror(errno));
+        return -1;
+    }
+    if((g_tdpl_reqack = tdpl_create(CLIENT_TDPL_REQTHREAD_NUM,CLIENT_TDPL_MAX_REQQ)) == NULL){
+        syslog(LOG_DEBUG,"Failed to create thread pool of request_ack:%s",strerror(errno));
+        return -1;
+    }
+
     return 1;
 }
 
@@ -404,15 +417,12 @@ int client_get_passwdandkey(char *src_str,char *passwd,char *pub_key){
 int client_verify(int sockfd,struct in_addr ip,struct usr_info *p_usr_i){
     char passwd[MAX_RECV_STR_LENGTH] = {0};
     char recv_str[MAX_RECV_STR_LENGTH];
-    char send_buf[MAX_RECV_STR_LENGTH];
     char local_pub_key[4096];
     char plain[MAX_RECV_STR_LENGTH];
-    int result_value = 0;
+    int result_value[2] = {0};
+    int size;
 
     syslog(LOG_DEBUG,"ip:%s attempt to login",inet_ntoa(ip));
-    //if(com_recv_str(sockfd,recv_str,MAX_RECV_STR_LENGTH,1) < 0){
-    //    return -1;
-    //}
     if(com_rcv_data(sockfd,recv_str,MAX_RECV_STR_LENGTH) == -1){
         syslog(LOG_DEBUG,"Error:failed to recv user's name,%s",strerror(errno));
         return -1;
@@ -420,13 +430,13 @@ int client_verify(int sockfd,struct in_addr ip,struct usr_info *p_usr_i){
     syslog(LOG_DEBUG,"login name:%s",recv_str);
     if(client_get_usrinfo(&g_client_mysql,recv_str,p_usr_i) == -1){
         syslog(LOG_DEBUG,"Client login failed,user name:%s does not exist",recv_str);
-        result_value = 29;
+        result_value[0] = 29;
         if(com_snd_data(sockfd,(char *)&result_value,sizeof(int),0) == 1)return -1;
         return -2;
     }
     syslog(LOG_DEBUG,"Genarating RSA key and share the pub key");
     rsa_gen_keys(RSA_KEY_LENGTH,local_pub_key,p_usr_i->priv_key);  //生成密钥对
-    if(com_snd_data(sockfd,local_pub_key,strlen(local_pub_key) + 1,0) == -1){
+    if((size = com_snd_data(sockfd,local_pub_key,strlen(local_pub_key) + 1,0)) == -1){
         return -1;
     }
     if(com_rcv_data(sockfd,recv_str,MAX_RECV_STR_LENGTH) == -1){
@@ -435,21 +445,23 @@ int client_verify(int sockfd,struct in_addr ip,struct usr_info *p_usr_i){
     rsa_priv_decrypt(p_usr_i->priv_key,recv_str,plain);  //解密客户端发来的认证内容
     client_get_passwdandkey(plain,passwd,p_usr_i->pub_key);
     syslog(LOG_DEBUG,"Checking the passwd of %s,login passwd:%s",p_usr_i->name,passwd);
+    printf("Client pub_key:\n%s\n",p_usr_i->pub_key);
     if(strcmp(passwd,p_usr_i->passwd) != 0){
         syslog(LOG_DEBUG,"Client login failed:incorrect passwd");
-        result_value = 30;
-        if(com_snd_data(sockfd,(char *)&result_value,sizeof(int),0) == -1)return -1;
+        result_value[0] = 30;
+        if(com_snd_data(sockfd,(char *)result_value,sizeof(int),0) == -1)return -1;
         return -3;
     }
     if(client_search(p_usr_i->id) != NULL){
         syslog(LOG_DEBUG,"Client login failed:multiple login");
-        result_value = -31;
-        if(com_snd_data(sockfd,(char *)&result_value,sizeof(int),0) == -1)return -1;
+        result_value[0] = 31;
+        if(com_snd_data(sockfd,(char *)result_value,sizeof(int),0) == -1)return -1;
         return -4;
     }
     syslog(LOG_DEBUG,"Client login successfully");
-    result_value = 1;
-    if(com_snd_data(sockfd,(char *)&result_value,sizeof(int),0) < 0)return -1;
+    result_value[0] = 1;
+    result_value[1] = p_usr_i->id;
+    if((size = com_snd_data(sockfd,(char *)result_value,2*sizeof(int),0)) <= 0)return -1;
     return 1;
 }
 
@@ -1034,14 +1046,16 @@ void *client_dec_parse_thread(){
         memset(&msg,0,sizeof(struct cm_msg));
         aes_cbc_dec(&pci->aes_dec_key,(unsigned char*)pci->p_rcv_s->buf,(unsigned char*)&msg,pci->p_rcv_s->msg_size);
         mmpl_rlsmem(g_trdata_mmpl,pci->p_rcv_s);
+        syslog(LOG_DEBUG,"Msg client_id:%d",msg.client_id);
         syslog(LOG_DEBUG,"Msg data:%s",msg.data);
-        syslog(LOG_DEBUG,"Msg cnt:%d",msg.msg_cnt);
+        syslog(LOG_DEBUG,"Msg type:%d",msg.type);
         client_set_recv_ready(pci,1);  //解密好报文之后，可以继续接收信息
         if((int)msg.client_id != c_id){
             syslog(LOG_DEBUG,"Msg error:client_id:%d,msg_cnt:%d",msg.client_id,msg.msg_cnt);
+            continue;
         }
         if(msg.type == 4){
-            client_wd_resume(c_id);
+            client_wd_resume(c_id);//喂狗
         }else if(msg.type == 2){
             switch(msg.req_er_type){
                 case 1:
@@ -1056,7 +1070,6 @@ void *client_dec_parse_thread(){
                     client_rls_ci(pci);
                     client_remove(msg.client_id);
                     break;
-
             }
         }
         //if((pci->msg_cnt != (int)msg.msg_cnt) || (pci->id != c_id)){  
@@ -1118,6 +1131,7 @@ void *client_create_thread(void *p_client_i){
     struct epoll_event event;
     unsigned char aes_key[CLIENT_AES_KEY_LENGTH];
     int err_ret;
+    int i;
     p_new_client_i = (struct client_info*)p_client_i;
     if((err_ret = client_verify(p_new_client_i->sockfd,p_new_client_i->ip,&u_i)) < 0){  //验证客户端
         syslog(LOG_DEBUG,"Error:failed to verify client!");
@@ -1134,6 +1148,13 @@ void *client_create_thread(void *p_client_i){
     /*生成AESKEY，并且发给客户端*/
     syslog(LOG_DEBUG,"Genarating AES key and share the key"); 
     aes_gen_key(aes_key,CLIENT_AES_KEY_LENGTH);  //随机生成AES秘钥
+    /*此处是调试用的代码*/
+    printf("以下是aes密钥\n");   
+    for(i = 0;i < CLIENT_AES_KEY_LENGTH/8;i++){
+        printf("0x%x ",aes_key[i]);
+    }
+    fflush(stdout);
+    /*以上是调试用的代码*/
     AES_set_encrypt_key(aes_key,CLIENT_AES_KEY_LENGTH,&p_new_client_i->aes_enc_key);
     AES_set_decrypt_key(aes_key,CLIENT_AES_KEY_LENGTH,&p_new_client_i->aes_dec_key);
     com_rsa_send_aeskey(p_new_client_i->sockfd,p_new_client_i->pub_key,aes_key,CLIENT_AES_KEY_LENGTH);  //rsa公钥加密发送AESkey
@@ -1221,8 +1242,6 @@ int client_wd_resume(int client_id){
         sem_post(&client_list_mutex);
         return -1;
     }
-    printf("gaga\n");
-    fflush(stdout);
     heart_beat_msg.type = 4;  //心跳报文
     heart_beat_msg.client_id = client_id;
     heart_beat_msg.data_size = 0;

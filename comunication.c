@@ -158,7 +158,7 @@ int com_snd_data(int sockfd,char *snd_data,int data_size,int enc_flg){
         send(sockfd,&syc_char,1,0);  //发送3个同步符号
     }
     for(i = 0;i < 2;i++){
-        if(head.u8[i] == syc_char){
+        if(head.u8[i] == syc_char || head.u8[i] == ctl_char){
             send(sockfd,&ctl_char,1,0);
             send(sockfd,&head.u8[i],1,0);
         }else{
@@ -166,7 +166,7 @@ int com_snd_data(int sockfd,char *snd_data,int data_size,int enc_flg){
         }
     }
     real_snd_size = send(sockfd,snd_data,snd_size,0); //发送报文
-    return 1;
+    return real_snd_size;
 }
 
 /* 函数名: int com_rcv_data(int sockfd,char *rcv_buf,int buf_size)
