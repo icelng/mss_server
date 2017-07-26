@@ -32,11 +32,12 @@ struct cm_rcv_s{
     void *buf;  //指向缓冲区
 };
 
+
 struct cm_msg{   //通信报文,cm即是comunication
     unsigned int client_id; //客户端id
     unsigned short type;
     unsigned short req_er_type;  //请求类型或者错误类型
-    unsigned int msg_cnt;
+    unsigned int dest_id;
     unsigned short data_size;
     unsigned short check_sum; //校验和
     unsigned char data[CLIENT_MAX_MSG_DATA_SIZE];
@@ -64,7 +65,7 @@ struct client_info{
     int queote_cnt; //客户端信息被引用次数,只有引用次数为0的时候，才释放删除使能锁
     sem_t queote_cnt_mutex;  //互斥访问客户端信息结构体的引用次数，引用次数大于零的时候，会占用删除使能锁
     sem_t del_enable;   //删除使能锁，，只有在拿到这个锁的时候，才能够删除该结构体
-    int msg_cnt;  //报文计数
+    //int msg_cnt;  //报文计数
     struct cm_rcv_s *p_rcv_s; //指向接收缓存的结构体
     int recv_size;  //处于报文接收状态的时候，需要接收的数据大小，直到为0时，把状态置为监听状态
     int recv_buf_offset; //接收缓冲区的偏移地址

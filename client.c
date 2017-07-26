@@ -613,7 +613,7 @@ int client_snd_msg(struct cm_msg *msg,int enc_flag){
     int i;
     int msg_size;
     int ret_val;
-    pci = client_get_ci(msg->client_id);
+    pci = client_get_ci(msg->dest_id);
     if(pci == NULL){
         syslog(LOG_DEBUG,"Error:client_snd_msg():client(id:%d) not found",msg->client_id);
         return -1;
@@ -667,7 +667,7 @@ void *client_enc_thread(){
             sleep(1);
             continue;
         }
-        pci = client_get_ci(msg.client_id);
+        pci = client_get_ci(msg.dest_id);
         if(pci == NULL){
             syslog(LOG_DEBUG,"ERROR:client_enc_thread():client(id:%d) not found!",msg.client_id);
             continue;
@@ -1012,9 +1012,9 @@ int client_parse_do(char *info_src,struct client_info *p_c_i){
     while(info_src[i++] != ':');
     strncpy(cmd,info_src,i - 1);
     strcpy(param,info_src + i);
-    if(strcmp(cmd,"cnt") == 0){
-        p_c_i->msg_cnt = atoi(param);
-    }
+    //if(strcmp(cmd,"cnt") == 0){
+    //    p_c_i->msg_cnt = atoi(param);
+    //}
     //syslog(LOG_DEBUG,"msg_cnt:%d",p_c_i->msg_cnt);
 
     return 1;
@@ -1027,7 +1027,7 @@ int client_parse_do(char *info_src,struct client_info *p_c_i){
 void *client_dec_parse_thread(){
     int ret_value;
     int c_id;
-    struct client_info *pci;
+    struct client_info *pci,*dest_pci;
     struct cm_msg msg;
     while(1){
         c_id = 0;
@@ -1049,27 +1049,39 @@ void *client_dec_parse_thread(){
         syslog(LOG_DEBUG,"Msg client_id:%d",msg.client_id);
         syslog(LOG_DEBUG,"Msg data:%s",msg.data);
         syslog(LOG_DEBUG,"Msg type:%d",msg.type);
+        syslog(LOG_DEBUG,"DATA size:%d",msg.data_size);
         client_set_recv_ready(pci,1);  //解密好报文之后，可以继续接收信息
+        client_rls_ci(pci);
         if((int)msg.client_id != c_id){
-            syslog(LOG_DEBUG,"Msg error:client_id:%d,msg_cnt:%d",msg.client_id,msg.msg_cnt);
+            syslog(LOG_DEBUG,"Msg error:client_id:%d,dest_id:%d",msg.client_id,msg.dest_id);
             continue;
         }
         if(msg.type == 4){
             client_wd_resume(c_id);//喂狗
         }else if(msg.type == 2){
-            switch(msg.req_er_type){
-                case 1:
-                    msg.msg_cnt = pci->msg_cnt++;
-                    strcpy((char *)msg.data,"You have not the permission of knowing that!");
-                    msg.data_size = strlen((char *)msg.data) + 1;
-                    client_snd_msg(&msg,1);
-                    break;
-                case 2:
-                    break;
-                case 4:
-                    client_rls_ci(pci);
-                    client_remove(msg.client_id);
-                    break;
+            if(msg.dest_id == 0){
+                switch(msg.req_er_type){ //非转发请求报文
+                    case 1:
+                        //msg.msg_cnt = pci->msg_cnt++;
+                        strcpy((char *)msg.data,"You have not the permission of knowing that!");
+                        msg.data_size = strlen((char *)msg.data) + 1;
+                        client_snd_msg(&msg,1);
+                        break;
+                    case 2:
+                        break;
+                    case 4:
+                        client_remove(msg.client_id);
+                        break;
+                }
+            }else{ //转发请求报文
+                dest_pci = client_get_ci(msg.dest_id);  //检查是否存在报文目的客户端
+                if(dest_pci == NULL){
+                    syslog(LOG_DEBUG,"dest_pci:%d is not exist,failed to transmit the msg",msg.dest_id);
+                    continue;
+                }
+                client_rls_ci(dest_pci);
+                syslog(LOG_DEBUG,"Transmit msg");
+                client_snd_msg(&msg,1);
             }
         }
         //if((pci->msg_cnt != (int)msg.msg_cnt) || (pci->id != c_id)){  
@@ -1244,6 +1256,7 @@ int client_wd_resume(int client_id){
     }
     heart_beat_msg.type = 4;  //心跳报文
     heart_beat_msg.client_id = client_id;
+    heart_beat_msg.dest_id = client_id;
     heart_beat_msg.data_size = 0;
     pci->wd_cnt = WD_RESUME_CNT;
     client_snd_msg(&heart_beat_msg,1);  //回送心跳报文
